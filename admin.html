@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CriaDigi · Admin da marca</title>
+<meta name="robots" content="noindex">
+<script>
+  /* aplica o tema antes de desenhar a página (evita piscar) */
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem("criadigi-tema"); } catch (e) {}
+    if (t !== "dark" && t !== "light") t = window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
+<link rel="icon" type="image/png" href="logo-rosa.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800;900&family=Poppins:wght@500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/styles.css">
+</head>
+<body class="pg-admin">
+<header id="topo"></header>
+<main id="entrada" hidden></main>
+
+<main id="admin" class="admin" hidden>
+  <nav class="admin-menu" id="admin-menu" aria-label="Seções do manual de marca">
+    <button type="button" data-sec="identidade" class="on">Identidade</button>
+    <button type="button" data-sec="cores">Cores <span class="cont" data-cont="cores"></span></button>
+    <button type="button" data-sec="fontes">Tipografia <span class="cont" data-cont="fontes"></span></button>
+    <button type="button" data-sec="logos">Logos <span class="cont" data-cont="logos"></span></button>
+    <button type="button" data-sec="referencias">Referências <span class="cont" data-cont="referencias"></span></button>
+    <button type="button" data-sec="estilos">Estilos <span class="cont" data-cont="estilos"></span></button>
+    <button type="button" data-sec="usuarios">Contas</button>
+    <button type="button" data-sec="ia">IA e limites</button>
+  </nav>
+  <div class="admin-conteudo" id="admin-conteudo"></div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="assets/js/config.js"></script>
+<script src="assets/js/core.js"></script>
+<script src="assets/js/admin.js"></script>
+</body>
+</html>

@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CriaDigi · Digi</title>
+<meta name="description" content="Gerador de imagens da Digi: toda imagem segue o manual da marca.">
+<script>
+  /* aplica o tema antes de desenhar a página (evita piscar) */
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem("criadigi-tema"); } catch (e) {}
+    if (t !== "dark" && t !== "light") t = window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
+<link rel="icon" type="image/png" href="logo-rosa.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800;900&family=Poppins:wght@500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/styles.css">
+</head>
+<body class="pg-criar">
+<header id="topo"></header>
+
+<main id="app" hidden>
+  <div class="area">
+
+    <!-- ============ CRIAR ============ -->
+    <aside class="painel painel-criar" aria-label="Criar imagem">
+      <h2 class="titulo-painel">Criar imagem</h2>
+
+      <label class="campo" for="prompt">
+        <span class="rotulo">O que você quer criar?</span>
+        <textarea id="prompt" rows="5" maxlength="2000"
+          placeholder="Ex.: equipe comemorando a meta batida em um escritório moderno, clima de conquista"></textarea>
+      </label>
+      <div class="ideias" id="ideias" aria-label="Ideias de prompt"></div>
+
+      <div class="bloco">
+        <span class="rotulo">Estilo</span>
+        <div class="chips" id="estilos" role="radiogroup" aria-label="Estilo"></div>
+      </div>
+
+      <div class="bloco">
+        <span class="rotulo">Formato</span>
+        <div class="formatos" id="formatos" role="radiogroup" aria-label="Formato"></div>
+      </div>
+
+      <div class="bloco">
+        <span class="rotulo">Variações</span>
+        <div class="segmentado" id="quantidade" role="radiogroup" aria-label="Quantidade de variações">
+          <button type="button" data-q="1">1</button>
+          <button type="button" data-q="2" class="on">2</button>
+          <button type="button" data-q="4">4</button>
+        </div>
+      </div>
+
+      <details class="bloco base-opcional" id="bloco-base">
+        <summary>Partir de uma imagem <small>(opcional)</small></summary>
+        <p class="ajuda">Envie uma foto ou rascunho. A IA vai recriá-la dentro do padrão da marca.</p>
+        <label class="soltar" id="soltar-base">
+          <input type="file" id="arquivo-base" accept="image/*" hidden>
+          <span>Arraste aqui ou <u>escolha um arquivo</u></span>
+        </label>
+        <div class="base-previa" id="base-previa" hidden>
+          <img alt="Imagem de base">
+          <button type="button" class="btn btn-sm btn-ghost" id="remover-base">Remover</button>
+        </div>
+      </details>
+
+      <button class="btn btn-primario btn-largo btn-gerar" id="gerar" type="button">
+        <span class="txt">Gerar imagens</span>
+      </button>
+      <p class="nota-marca" id="aviso-conta"></p>
+      <p class="nota-marca">Toda imagem segue o manual da marca: paleta, estilo e regras cadastrados pelo admin.</p>
+    </aside>
+
+    <!-- ============ PALCO ============ -->
+    <section class="palco" aria-label="Imagens">
+      <div class="palco-topo" id="palco-topo">
+        <div class="abas" role="tablist">
+          <button role="tab" class="aba on" data-aba="resultados" aria-selected="true">Resultados</button>
+          <button role="tab" class="aba" data-aba="galeria" aria-selected="false">Minhas criações</button>
+        </div>
+        <label class="btn btn-sm btn-ghost">
+          <input type="file" id="abrir-local" accept="image/*" hidden>
+          Editar imagem do computador
+        </label>
+      </div>
+
+      <div id="resultados" class="grade">
+        <div class="vazio" id="vazio">
+          <div class="vazio-icone" aria-hidden="true">
+            <svg viewBox="0 0 48 48" width="48" height="48"><rect x="6" y="9" width="36" height="30" rx="5" fill="none" stroke="currentColor" stroke-width="2.5"/><circle cx="17" cy="19" r="3.5" fill="currentColor"/><path d="M8 35l10-10 7 7 6-6 9 9" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/></svg>
+          </div>
+          <h3>Descreva a imagem e clique em gerar</h3>
+          <p>A CriaDigi aplica as cores, o estilo e as regras da marca. Depois você recorta, ajusta, coloca texto e logo.</p>
+        </div>
+      </div>
+
+      <div id="galeria" class="grade" hidden></div>
+
+      <div id="editor" class="editor" hidden>
+        <div class="editor-barra">
+          <button type="button" class="btn btn-sm btn-ghost" id="voltar">← Voltar</button>
+          <span class="editor-info" id="editor-info"></span>
+          <div class="editor-acoes">
+            <button type="button" class="icone" id="desfazer" title="Desfazer (Ctrl+Z)" aria-label="Desfazer">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path d="M9 7H4V2M4 7a9 9 0 1 1-1 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <button type="button" class="icone" id="refazer" title="Refazer (Ctrl+Shift+Z)" aria-label="Refazer">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path d="M15 7h5V2M20 7a9 9 0 1 0 1 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="barra-recorte" id="barra-recorte" hidden>
+          <span>Proporção:</span>
+          <div class="chips chips-sm" id="razoes-recorte"></div>
+          <div class="barra-recorte-acoes">
+            <button type="button" class="btn btn-sm btn-ghost" id="cancelar-recorte">Cancelar</button>
+            <button type="button" class="btn btn-sm btn-primario" id="aplicar-recorte">Aplicar recorte</button>
+          </div>
+        </div>
+        <div class="tela-wrap">
+          <canvas id="tela" aria-label="Imagem em edição"></canvas>
+        </div>
+        <p class="dica-editor">Arraste textos e a logo direto na imagem. <kbd>Delete</kbd> remove o item selecionado.</p>
+      </div>
+    </section>
+
+    <!-- ============ FERRAMENTAS ============ -->
+    <aside class="painel painel-ferramentas" aria-label="Ferramentas">
+      <div id="marca-ativa"></div>
+
+      <div id="ferramentas" hidden>
+        <div class="refinar">
+          <span class="rotulo">Refinar com IA</span>
+          <div class="refinar-linha">
+            <input type="text" id="refinar-texto" placeholder="Ex.: fundo mais claro, mais pessoas…">
+            <button type="button" class="btn btn-sm btn-primario" id="refinar">Refinar</button>
+          </div>
+        </div>
+
+        <div class="abas abas-ferr" role="tablist">
+          <button role="tab" class="aba on" data-ferr="formato">Formato</button>
+          <button role="tab" class="aba" data-ferr="ajustes">Ajustes</button>
+          <button role="tab" class="aba" data-ferr="texto">Texto</button>
+          <button role="tab" class="aba" data-ferr="logo">Logo</button>
+          <button role="tab" class="aba" data-ferr="exportar">Baixar</button>
+        </div>
+
+        <!-- Formato -->
+        <section class="ferr" data-ferr="formato">
+          <span class="rotulo">Formato de saída</span>
+          <div class="lista-formatos" id="ed-formatos"></div>
+
+          <span class="rotulo">Tamanho em pixels</span>
+          <div class="tamanho">
+            <input type="number" id="ed-larg" min="16" max="6000" aria-label="Largura">
+            <button type="button" class="icone trava on" id="ed-trava" title="Manter proporção" aria-label="Manter proporção" aria-pressed="true">
+              <svg viewBox="0 0 24 24" width="16" height="16"><rect x="5" y="11" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+            </button>
+            <input type="number" id="ed-alt" min="16" max="6000" aria-label="Altura">
+            <button type="button" class="btn btn-sm btn-ghost" id="ed-redimensionar">Aplicar</button>
+          </div>
+
+          <div class="linha-botoes">
+            <button type="button" class="btn btn-sm btn-ghost" id="ed-recortar">Recortar</button>
+            <button type="button" class="icone" data-girar="-1" title="Girar para a esquerda" aria-label="Girar para a esquerda">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 4v6h6M3.5 10A9 9 0 1 1 6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </button>
+            <button type="button" class="icone" data-girar="1" title="Girar para a direita" aria-label="Girar para a direita">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path d="M21 4v6h-6M20.5 10A9 9 0 1 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </button>
+            <button type="button" class="icone" data-espelhar="h" title="Espelhar na horizontal" aria-label="Espelhar na horizontal">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path d="M12 3v18M9 7L4 12l5 5V7zM15 7l5 5-5 5V7z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+            </button>
+            <button type="button" class="icone" data-espelhar="v" title="Espelhar na vertical" aria-label="Espelhar na vertical">
+              <svg viewBox="0 0 24 24" width="18" height="18"><path d="M3 12h18M7 9l5-5 5 5H7zM7 15l5 5 5-5H7z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+        </section>
+
+        <!-- Ajustes -->
+        <section class="ferr" data-ferr="ajustes" hidden>
+          <label class="deslizador">Brilho <output>0</output><input type="range" min="-100" max="100" value="0" data-adj="brilho"></label>
+          <label class="deslizador">Contraste <output>0</output><input type="range" min="-100" max="100" value="0" data-adj="contraste"></label>
+          <label class="deslizador">Saturação <output>0</output><input type="range" min="-100" max="100" value="0" data-adj="saturacao"></label>
+          <label class="deslizador">Temperatura <output>0</output><input type="range" min="-100" max="100" value="0" data-adj="calor"></label>
+
+          <span class="rotulo">Filtro da marca</span>
+          <p class="ajuda">Tinge a imagem com uma cor da paleta.</p>
+          <div class="paleta" id="filtro-cores"></div>
+          <label class="deslizador">Intensidade <output>0</output><input type="range" min="0" max="100" value="0" id="filtro-forca"></label>
+
+          <span class="rotulo">Degradê para texto</span>
+          <p class="ajuda">Escurece uma borda para o texto ficar legível.</p>
+          <div class="paleta" id="degrade-cores"></div>
+          <label class="deslizador">Intensidade <output>0</output><input type="range" min="0" max="100" value="0" id="degrade-forca"></label>
+          <div class="segmentado segmentado-sm" id="degrade-lado">
+            <button type="button" data-lado="baixo" class="on">Base</button>
+            <button type="button" data-lado="cima">Topo</button>
+            <button type="button" data-lado="esquerda">Lateral</button>
+          </div>
+          <button type="button" class="btn btn-sm btn-ghost" id="zerar-ajustes">Zerar ajustes</button>
+        </section>
+
+        <!-- Texto -->
+        <section class="ferr" data-ferr="texto" hidden>
+          <div class="linha-botoes">
+            <button type="button" class="btn btn-sm btn-ghost" data-novo-texto="titulo">+ Título</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-novo-texto="subtitulo">+ Subtítulo</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-novo-texto="chamada">+ Chamada</button>
+          </div>
+          <div class="camadas" id="camadas-texto"></div>
+          <div id="props-texto" hidden>
+            <label class="campo"><span class="rotulo">Texto</span><textarea id="tx-texto" rows="3"></textarea></label>
+            <label class="campo"><span class="rotulo">Fonte</span><select id="tx-fonte"></select></label>
+            <div class="duas-col">
+              <label class="campo"><span class="rotulo">Peso</span>
+                <select id="tx-peso">
+                  <option value="400">Regular</option><option value="500">Médio</option>
+                  <option value="600">Semibold</option><option value="700">Bold</option>
+                  <option value="800">Extra bold</option><option value="900">Black</option>
+                </select>
+              </label>
+              <label class="campo checar"><input type="checkbox" id="tx-caixa"> Caixa alta</label>
+            </div>
+            <label class="deslizador">Tamanho <output>0</output><input type="range" min="1.5" max="20" step="0.1" id="tx-tamanho"></label>
+            <label class="deslizador">Largura do bloco <output>0</output><input type="range" min="20" max="100" id="tx-largura"></label>
+            <span class="rotulo">Cor</span>
+            <div class="paleta" id="tx-cores"></div>
+            <span class="rotulo">Fundo do texto</span>
+            <div class="paleta" id="tx-fundos"></div>
+            <span class="rotulo">Alinhamento e posição</span>
+            <div class="linha-botoes">
+              <div class="segmentado segmentado-sm" id="tx-alinhar">
+                <button type="button" data-al="left">Esq.</button>
+                <button type="button" data-al="center">Centro</button>
+                <button type="button" data-al="right">Dir.</button>
+              </div>
+            </div>
+            <div class="linha-botoes">
+              <div class="segmentado segmentado-sm" id="tx-posicao">
+                <button type="button" data-y="topo">Topo</button>
+                <button type="button" data-y="meio">Meio</button>
+                <button type="button" data-y="base">Base</button>
+              </div>
+            </div>
+            <button type="button" class="btn btn-sm btn-perigo" id="tx-remover">Remover texto</button>
+          </div>
+        </section>
+
+        <!-- Logo -->
+        <section class="ferr" data-ferr="logo" hidden>
+          <div class="logos-escolha" id="logos-escolha"></div>
+          <div id="props-logo">
+            <span class="rotulo">Posição</span>
+            <div class="grade-pos" id="logo-pos"></div>
+            <label class="deslizador">Tamanho <output>0</output><input type="range" min="4" max="60" id="logo-tamanho"></label>
+          </div>
+        </section>
+
+        <!-- Exportar -->
+        <section class="ferr" data-ferr="exportar" hidden>
+          <span class="rotulo">Arquivo</span>
+          <div class="segmentado" id="exp-tipo">
+            <button type="button" data-tipo="image/png" class="on">PNG</button>
+            <button type="button" data-tipo="image/jpeg">JPG</button>
+            <button type="button" data-tipo="image/webp">WebP</button>
+          </div>
+          <label class="deslizador" id="exp-qualidade-wrap" hidden>Qualidade <output>90</output><input type="range" min="40" max="100" value="90" id="exp-qualidade"></label>
+          <label class="campo"><span class="rotulo">Nome do arquivo</span><input type="text" id="exp-nome"></label>
+          <p class="ajuda" id="exp-resumo"></p>
+          <button type="button" class="btn btn-primario btn-largo" id="baixar">Baixar imagem</button>
+          <button type="button" class="btn btn-ghost btn-largo" id="copiar">Copiar para a área de transferência</button>
+        </section>
+      </div>
+    </aside>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="assets/js/config.js"></script>
+<script src="assets/js/core.js"></script>
+<script src="assets/js/editor.js"></script>
+<script src="assets/js/app.js"></script>
+</body>
+</html>
