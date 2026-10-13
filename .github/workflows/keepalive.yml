@@ -1,0 +1,85 @@
+# =====================================================================
+#  CriaDigi · Keep-Alive do Supabase (GitHub Actions)
+#  Caminho no repositório: .github/workflows/keepalive.yml
+#
+#  O plano gratuito do Supabase pausa o projeto depois de cerca de 7 dias
+#  sem atividade. Este robô faz uma consulta real ao banco a cada 3 dias,
+#  o que conta como uso e mantém o projeto ativo, mesmo que ninguém abra
+#  a plataforma.
+#
+#  O GitHub também desliga tarefas agendadas de repositórios sem commits
+#  há 60 dias. Por isso, se o último commit tiver mais de 50 dias, o robô
+#  faz um commit vazio para manter o próprio agendamento vivo.
+#
+#  CONFIGURAÇÃO (uma vez):
+#  Repositório → Settings → Secrets and variables → Actions →
+#  New repository secret, crie:
+#    SUPABASE_URL       ex.: https://abcdefgh.supabase.co
+#    SUPABASE_ANON_KEY  a chave "anon" ou "publishable" (a mesma do config.js)
+#
+#  Teste na hora: aba Actions → Supabase Keep-Alive → Run workflow.
+# =====================================================================
+
+name: Supabase Keep-Alive
+
+on:
+  schedule:
+    # a cada 3 dias, às 09:00 UTC (06:00 em Brasília)
+    - cron: "0 9 */3 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Consultar o banco do Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
+            echo "✗ Faltam os segredos SUPABASE_URL e/ou SUPABASE_ANON_KEY (Settings → Secrets and variables → Actions)."
+            exit 1
+          fi
+          URL="${SUPABASE_URL%/}/rest/v1/criadigi_marca?select=id&limit=1"
+          for tentativa in 1 2 3; do
+            CODIGO=$(curl -s -o resposta.txt -w "%{http_code}" "$URL" \
+              -H "apikey: $SUPABASE_ANON_KEY" \
+              -H "Authorization: Bearer $SUPABASE_ANON_KEY")
+            echo "Tentativa $tentativa: HTTP $CODIGO"
+            if [ "$CODIGO" -ge 200 ] && [ "$CODIGO" -lt 400 ]; then
+              echo "✓ Supabase respondeu. Projeto mantido ativo."
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "✗ O Supabase não respondeu. Resposta:"
+          cat resposta.txt
+          echo
+          echo "Se o projeto já estiver pausado, entre no painel do Supabase e clique em Restore."
+          exit 1
+
+  manter-agendamento:
+    runs-on: ubuntu-latest
+    needs: ping
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - name: Commit vazio se o repositório estiver parado há mais de 50 dias
+        run: |
+          ULTIMO=$(git log -1 --format=%ct)
+          AGORA=$(date +%s)
+          DIAS=$(( (AGORA - ULTIMO) / 86400 ))
+          echo "Último commit há $DIAS dias."
+          if [ "$DIAS" -ge 50 ]; then
+            git config user.name "criadigi-keepalive"
+            git config user.email "actions@users.noreply.github.com"
+            git commit --allow-empty -m "keep-alive: mantém o agendamento ativo"
+            git push
+            echo "✓ Commit de manutenção enviado."
+          else
+            echo "Nada a fazer."
+          fi
