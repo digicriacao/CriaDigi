@@ -160,7 +160,8 @@
         nunca: "Clichê corporativo de banco de imagens. Excesso de efeito neon ou luz pink artificial que tire o realismo. Tom amarelado na luz. Imagem inteira tingida de pink: preservar o equilíbrio entre áreas densas e respiros. Imagens escuras demais que atrapalhem a leitura do título. Muitos elementos competindo por atenção. Logotipos de outras marcas. Texto escrito na imagem.",
         logo_padrao: null, logo_posicao: "inf-dir", logo_tamanho: 16,
         modelo: "gemini-nano-banana-2.1", resolucao: "2K", max_referencias: 4,
-        permitir_texto_ia: false,
+        permitir_texto_ia: false, textos_ia: true, modelo_texto: "gemini-2.5-flash",
+        tom_de_voz: "Claro, próximo e confiante, como um consultor especialista sem arrogância.",
         anon_hora: 10, anon_dia: 20, anon_ip_dia: 100, conta_hora: 30, conta_dia: 100, limite_dia: 1000, dominios_conta: "",
       },
       cores: [
@@ -196,7 +197,8 @@
     const d = demo();
     for (let i = 0; i < 30; i++) {
       try { localStorage.setItem(DEMO_KEY, JSON.stringify(d)); return; } catch (_) {
-        if (d.geracoes.length) d.geracoes.pop(); else { toast("Armazenamento do navegador cheio no modo demonstração.", "erro"); return; }
+        if (d.conversas && d.conversas.length > 1) d.conversas.pop();
+        else if (d.geracoes.length) d.geracoes.pop(); else { toast("Armazenamento do navegador cheio no modo demonstração.", "erro"); return; }
       }
     }
   }
@@ -253,6 +255,36 @@
     x.globalAlpha = 1;
     return c.toDataURL("image/jpeg", 0.85);
   }
+  // demonstração: imita o planejamento de textos da IA (só para testar a tela)
+  function demoPlano(p) {
+    const pedido = String(p.prompt || "");
+    const baixo = pedido.toLowerCase();
+    const textos = (p.textos_atuais || []).map((t) => ({ ...t }));
+    const definir = (tipo, texto) => {
+      const t = textos.find((x) => x.tipo === tipo);
+      if (t) t.texto = texto; else textos.push({ tipo, texto });
+    };
+    const aspas = [...pedido.matchAll(/["“”']([^"“”']{2,120})["“”']/g)].map((m) => m[1]);
+    const falaTitulo = /t[ií]tulo|mensagem|escrit|frase|texto/.test(baixo);
+    if (aspas[0] && (falaTitulo || !textos.length)) definir("titulo", aspas[0]);
+    if (/subt[ií]tulo/.test(baixo)) definir("subtitulo", aspas[1] || "Que o próximo ano seja ainda mais extraordinário.");
+    if (/chamada|bot[aã]o|cta/.test(baixo)) definir("chamada", aspas[2] || "Saiba mais");
+    if (/(tire|remova|sem) (o )?subt[ií]tulo/.test(baixo)) { const i = textos.findIndex((t) => t.tipo === "subtitulo"); if (i >= 0) textos.splice(i, 1); }
+    const soTexto = !!p.base && /t[ií]tulo|subt[ií]tulo|texto|chamada|frase|escrev/.test(baixo) && !/fundo|pessoa|cor |luz|3d|cen[aá]rio|objeto|roupa/.test(baixo);
+    let posicao = p.posicao_atual || "topo";
+    if (/embaixo|na base|parte de baixo/.test(baixo)) posicao = "base";
+    if (/em cima|no topo/.test(baixo)) posicao = "topo";
+    if (/esquerda/.test(baixo)) posicao = "esquerda";
+    const ordem = ["titulo", "subtitulo", "chamada"];
+    textos.sort((a, b) => ordem.indexOf(a.tipo) - ordem.indexOf(b.tipo));
+    const escrito = textos.map((t) => `“${t.texto}”`).join(" e ");
+    return {
+      gerar_imagem: !soTexto, textos, posicao,
+      resposta: soTexto ? `Atualizei os textos: ${escrito}. A imagem continua a mesma.`
+        : textos.length ? `Criei a imagem e apliquei ${escrito}. Tudo editável no editor.` : "",
+    };
+  }
+
   // demonstração: "ajuste" = a mesma imagem com um leve tom da paleta
   async function demoRefinar(base, cores, i) {
     const img = await carregarImagem(`data:${base.mime || "image/jpeg"};base64,${base.data}`);
@@ -318,7 +350,7 @@
   const T = {
     marca: "criadigi_marca", cores: "criadigi_cores", arquivos: "criadigi_arquivos",
     estilos: "criadigi_estilos", geracoes: "criadigi_geracoes", formatos: "criadigi_formatos",
-    templates: "criadigi_templates",
+    templates: "criadigi_templates", conversas: "criadigi_conversas",
   };
   const B = { marca: "criadigi-marca", geracoes: "criadigi-geracoes" };
   const F = { gerar: "criadigi-gerar", usuarios: "criadigi-usuarios" };
@@ -559,6 +591,11 @@
         const d = demo();
         const s = demoSessao();
         const conta = s && emailPermitido(s.email, d.marca) ? s : null;
+        const plano = params.modo === "foto" || params.sem_textos ? null : demoPlano(params);
+        if (plano && params.base_tipo === "refinar" && params.base && !plano.gerar_imagem) {
+          await espera(500);
+          return { imagens: [], erros: [], gerou_imagem: false, textos: plano.textos, posicao: plano.posicao, resposta: plano.resposta };
+        }
         const qtd = params.modo === "foto" ? 1 : params.quantidade;
         const restante = demoLimite(d.marca, conta, qtd);
         await espera(1000 + Math.random() * 800);
@@ -569,12 +606,15 @@
           else if (params.base && params.base_tipo === "refinar") url = await demoRefinar(params.base, d.cores, i);
           else url = demoImagem(params.proporcao, params.estilo_nome, hash(params.prompt + Date.now() + i), d.cores);
           const id = uid();
-          if (conta && params.modo !== "foto") d.geracoes.unshift({ id, user_id: conta.id, url, prompt: params.prompt, formato: params.formato, estilo: params.estilo_nome, criado_em: new Date().toISOString() });
+          if (conta && params.modo !== "foto") d.geracoes.unshift({ id, user_id: conta.id, email: conta.email, url, prompt: params.prompt, formato: params.formato, estilo: params.estilo_nome, textos: plano ? { textos: plano.textos, posicao: plano.posicao } : null, criado_em: new Date().toISOString() });
           imagens.push({ id, url });
         }
         d.geracoes = d.geracoes.slice(0, 16);
         demoSalvar();
-        return { imagens, erros: [], salvo: !!conta && params.modo !== "foto", restante_hora: restante };
+        return {
+          imagens, erros: [], salvo: !!conta && params.modo !== "foto", restante_hora: restante, gerou_imagem: true,
+          textos: plano ? plano.textos : null, posicao: plano ? plano.posicao : null, resposta: plano ? plano.resposta : null,
+        };
       }
       const { data, error } = await sb.functions.invoke(F.gerar, { body: { ...params, cliente: clienteId() } });
       if (error) throw new Error(await erroDaFuncao(error));
@@ -667,10 +707,164 @@
       if (error) throw error;
     },
 
+    // ---------------------------------------------------------------- conversas do chat
+    // lista: própria (padrão) ou de todo mundo (admin, todas: true)
+    async conversas({ todas = false, busca = "", limite = 100 } = {}) {
+      const termo = String(busca || "").trim().toLowerCase();
+      if (DEMO) {
+        const s = demoSessao();
+        if (!s) return [];
+        return (demo().conversas || [])
+          .filter((c) => (todas && s.admin) || c.user_id === s.id)
+          .filter((c) => !termo || (c.email || "").toLowerCase().includes(termo) || (c.titulo || "").toLowerCase().includes(termo))
+          .sort((a, b) => String(b.atualizado_em).localeCompare(String(a.atualizado_em)))
+          .slice(0, limite)
+          .map(({ mensagens, historico, ...c }) => ({ ...c, n: (mensagens || []).length }));
+      }
+      const { data: ses } = await sb.auth.getSession();
+      if (!ses.session) return [];
+      let q = sb.from(T.conversas).select("id, user_id, email, titulo, criado_em, atualizado_em")
+        .order("atualizado_em", { ascending: false }).limit(limite);
+      if (!todas) q = q.eq("user_id", ses.session.user.id);
+      if (termo) {
+        const t = termo.replace(/[%,()]/g, " ");
+        q = q.or(`email.ilike.%${t}%,titulo.ilike.%${t}%`);
+      }
+      const { data, error } = await q;
+      if (error) {
+        if (/does not exist|schema cache/i.test(error.message)) return [];
+        throw error;
+      }
+      return data;
+    },
+
+    async conversa(id) {
+      if (DEMO) {
+        const c = (demo().conversas || []).find((x) => x.id === id);
+        if (!c) throw new Error("Conversa não encontrada.");
+        return JSON.parse(JSON.stringify(c));
+      }
+      const { data, error } = await sb.from(T.conversas).select("*").eq("id", id).maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error("Conversa não encontrada.");
+      return data;
+    },
+
+    // grava (cria ou atualiza) e devolve o id
+    async salvarConversa({ id, titulo, mensagens, historico }) {
+      const agora = new Date().toISOString();
+      const linha = { titulo: String(titulo || "Conversa").slice(0, 140), mensagens: mensagens || [], historico: historico || [], atualizado_em: agora };
+      if (DEMO) {
+        const s = demoSessao();
+        if (!s) throw new Error("Entre na sua conta para salvar conversas.");
+        const d = demo();
+        d.conversas = d.conversas || [];
+        const atual = id && d.conversas.find((c) => c.id === id);
+        if (atual) { Object.assign(atual, linha); d.conversas = [atual, ...d.conversas.filter((c) => c !== atual)]; }
+        else { id = uid(); d.conversas.unshift({ ...linha, id, user_id: s.id, email: s.email, criado_em: agora }); }
+        d.conversas = d.conversas.slice(0, 12);
+        demoSalvar();
+        return id;
+      }
+      const { data: ses } = await sb.auth.getSession();
+      if (!ses.session) throw new Error("Entre na sua conta para salvar conversas.");
+      if (id) {
+        const { error } = await sb.from(T.conversas).update(linha).eq("id", id);
+        if (error) throw error;
+        return id;
+      }
+      const { data, error } = await sb.from(T.conversas)
+        .insert({ ...linha, user_id: ses.session.user.id, email: ses.session.user.email })
+        .select("id").single();
+      if (error) throw error;
+      return data.id;
+    },
+
+    async apagarConversa(id) {
+      if (DEMO) { const d = demo(); d.conversas = (d.conversas || []).filter((c) => c.id !== id); demoSalvar(); return; }
+      const { error } = await sb.from(T.conversas).delete().eq("id", id);
+      if (error) throw error;
+    },
+
+    // ---------------------------------------------------------------- criações (admin vê todas)
+    async criacoes({ busca = "", limite = 200 } = {}) {
+      const termo = String(busca || "").trim().toLowerCase();
+      if (DEMO) {
+        const d = demo();
+        const email = (id) => (d.usuarios.find((u) => u.id === id) || {}).email || "";
+        return d.geracoes.map((g) => ({ ...g, email: g.email || email(g.user_id) }))
+          .filter((g) => !termo || g.email.toLowerCase().includes(termo) || (g.prompt || "").toLowerCase().includes(termo))
+          .slice(0, limite);
+      }
+      let q = sb.from(T.geracoes).select("*").order("criado_em", { ascending: false }).limit(limite);
+      if (termo) {
+        const t = termo.replace(/[%,()]/g, " ");
+        q = q.or(`email.ilike.%${t}%,prompt.ilike.%${t}%`);
+      }
+      const { data, error } = await q;
+      if (error) throw error;
+      return data.map((g) => ({ ...g, url: sb.storage.from(B.geracoes).getPublicUrl(g.caminho).data.publicUrl }));
+    },
+
+    // uma criação (a própria, ou qualquer uma para o admin)
+    async criacao(id) {
+      if (DEMO) {
+        const d = demo();
+        const s = demoSessao();
+        const g = d.geracoes.find((x) => x.id === id);
+        if (!g || !s || (g.user_id !== s.id && !s.admin)) throw new Error("Criação não encontrada ou sem permissão para abrir.");
+        return { ...g, email: g.email || (d.usuarios.find((u) => u.id === g.user_id) || {}).email || "" };
+      }
+      const { data, error } = await sb.from(T.geracoes).select("*").eq("id", id).maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error("Criação não encontrada ou sem permissão para abrir.");
+      return { ...data, url: sb.storage.from(B.geracoes).getPublicUrl(data.caminho).data.publicUrl };
+    },
+
+    // salva a arte editada como uma nova criação na conta do dono (o admin pode salvar na conta de outra pessoa)
+    // dados: { dono_id, dono_email, prompt, formato, estilo, origem }
+    async salvarEdicao(blob, dados = {}) {
+      if (DEMO) {
+        const s = demoSessao();
+        if (!s) throw new Error("Entre na sua conta para salvar.");
+        const d = demo();
+        const url = await arquivoParaDataURL(blob);
+        const id = uid();
+        d.geracoes.unshift({
+          id, user_id: dados.dono_id || s.id, email: dados.dono_email || s.email, url, prompt: dados.prompt || "Arte editada",
+          formato: dados.formato || null, estilo: dados.estilo || null, origem: dados.origem || null, editado_por: s.email,
+          criado_em: new Date().toISOString(),
+        });
+        d.geracoes = d.geracoes.slice(0, 16);
+        demoSalvar();
+        return { id, url };
+      }
+      const { data: ses } = await sb.auth.getSession();
+      if (!ses.session) throw new Error("Entre na sua conta para salvar.");
+      const dono = dados.dono_id || ses.session.user.id;
+      const ext = blob.type === "image/png" ? "png" : blob.type === "image/webp" ? "webp" : "jpg";
+      const caminho = `${dono}/${uid()}.${ext}`;
+      const up = await sb.storage.from(B.geracoes).upload(caminho, blob, { contentType: blob.type || "image/jpeg", upsert: false });
+      if (up.error) throw new Error(/row-level|policy|Unauthorized/i.test(up.error.message) ? "Sua conta não tem permissão para salvar artes." : up.error.message);
+      const uuidOk = (v) => /^[0-9a-f-]{36}$/i.test(String(v || ""));
+      const linha = {
+        user_id: dono, email: dados.dono_email || ses.session.user.email, prompt: dados.prompt || "Arte editada",
+        formato: dados.formato || null, estilo: dados.estilo || null, caminho, modelo: "editor",
+        editado_por: ses.session.user.email, origem: uuidOk(dados.origem) ? dados.origem : null,
+      };
+      let { data, error } = await sb.from(T.geracoes).insert(linha).select("id").single();
+      if (error && /editado_por|origem/.test(error.message)) {
+        delete linha.editado_por; delete linha.origem;
+        ({ data, error } = await sb.from(T.geracoes).insert(linha).select("id").single());
+      }
+      if (error) { await sb.storage.from(B.geracoes).remove([caminho]); throw error; }
+      return { id: data.id, url: sb.storage.from(B.geracoes).getPublicUrl(caminho).data.publicUrl };
+    },
+
     async usuarios(acao, dados = {}) {
       if (DEMO) {
         const d = demo();
-        if (acao === "listar") return { usuarios: d.usuarios.map((u) => ({ ...u, artes: d.geracoes.filter((g) => g.user_id === u.id).length })) };
+        if (acao === "listar") return { usuarios: d.usuarios.map((u) => ({ ...u, artes: d.geracoes.filter((g) => g.user_id === u.id).length, conversas: (d.conversas || []).filter((c) => c.user_id === u.id).length })) };
         if (acao === "criar") {
           if (d.usuarios.some((u) => u.email === dados.email)) throw new Error("Esse e-mail já tem conta.");
           d.usuarios.push({ id: uid(), email: dados.email, admin: !!dados.admin, criado_em: new Date().toISOString() });
@@ -720,7 +914,7 @@
   const ICONE_PESSOA = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
 
   // opcoes: { pagina: "criar" | "admin", sessao, aoMinhasCriacoes }
-  function montarCabecalho({ pagina, sessao, aoMinhasCriacoes }) {
+  function montarCabecalho({ pagina, sessao, aoMinhasCriacoes, aoMinhasConversas }) {
     const h = $("#topo");
     if (!h) return;
     const contaHtml = sessao ? `
@@ -731,7 +925,7 @@
         </summary>
         <div class="menu-pop">
           <div class="menu-email">${esc(sessao.email)}</div>
-          ${pagina === "criar" ? `<button type="button" data-acao="minhas">Minhas criações</button>` : `<a href="./">Voltar a criar</a>`}
+          ${pagina === "criar" ? `<button type="button" data-acao="minhas">Minhas criações</button><button type="button" data-acao="conversas">Minhas conversas</button>` : `<a href="./">Voltar a criar</a>`}
           ${sessao.admin && pagina !== "admin" ? `<a href="admin.html">Painel admin</a>` : ""}
           ${DEMO ? "" : `<button type="button" data-acao="senha">Trocar senha</button>`}
           <button type="button" data-acao="sair">Sair</button>
@@ -762,6 +956,7 @@
       const menu = b.closest("details"); if (menu) menu.open = false;
       if (b.dataset.acao === "entrar") abrirLogin();
       if (b.dataset.acao === "minhas" && aoMinhasCriacoes) aoMinhasCriacoes();
+      if (b.dataset.acao === "conversas" && aoMinhasConversas) aoMinhasConversas();
       if (b.dataset.acao === "sair") { await API.sair(); location.reload(); }
       if (b.dataset.acao === "reset-demo") {
         if (confirm("Apagar tudo o que foi cadastrado e gerado na demonstração?")) { API.resetarDemo(); location.reload(); }
@@ -944,10 +1139,65 @@
     });
   }
 
+  // ================================================================ favicon animado
+  // Bolinha pink pulsando. Enquanto a IA trabalha, ganha um anel girando.
+  // (O favicon.svg é o reserva, para quando o JavaScript ainda não rodou.)
+  const Favicon = (() => {
+    const N = 64;
+    let link = null, cv = null, ctx = null, timer = null, ocupado = false, t0 = performance.now();
+    function preparar() {
+      if (cv) return true;
+      try {
+        cv = document.createElement("canvas"); cv.width = cv.height = N;
+        ctx = cv.getContext("2d");
+        document.querySelectorAll('link[rel~="icon"]').forEach((l) => l.remove());
+        link = document.createElement("link");
+        link.rel = "icon"; link.type = "image/png";
+        document.head.appendChild(link);
+        return !!ctx;
+      } catch (_) { return false; }
+    }
+    function quadro() {
+      const t = (performance.now() - t0) / 1000;
+      const c = N / 2, rosa = "#EA0356";
+      ctx.clearRect(0, 0, N, N);
+      if (ocupado) {
+        // anel girando + bolinha menor
+        ctx.lineWidth = 7; ctx.lineCap = "round";
+        ctx.strokeStyle = "rgba(234,3,86,.22)";
+        ctx.beginPath(); ctx.arc(c, c, 26, 0, Math.PI * 2); ctx.stroke();
+        const a = t * 5.2;
+        ctx.strokeStyle = rosa;
+        ctx.beginPath(); ctx.arc(c, c, 26, a, a + Math.PI * 1.15); ctx.stroke();
+        ctx.fillStyle = rosa;
+        ctx.beginPath(); ctx.arc(c, c, 11 + Math.sin(t * 6) * 1.5, 0, Math.PI * 2); ctx.fill();
+      } else {
+        // pulso suave: halo que se expande e some
+        const f = (t % 2.4) / 2.4;
+        ctx.fillStyle = `rgba(234,3,86,${(0.5 * (1 - f)).toFixed(3)})`;
+        ctx.beginPath(); ctx.arc(c, c, 17 + f * 14, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = rosa;
+        ctx.beginPath(); ctx.arc(c, c, 17 * (1 - 0.06 * Math.sin(f * Math.PI * 2)), 0, Math.PI * 2); ctx.fill();
+      }
+      link.href = cv.toDataURL("image/png");
+    }
+    function iniciar() {
+      if (!preparar() || timer) return;
+      quadro();
+      timer = setInterval(() => { if (!document.hidden || ocupado) quadro(); }, 90);
+    }
+    return {
+      iniciar,
+      ocupado(v) { ocupado = !!v; t0 = performance.now(); if (cv) quadro(); },
+    };
+  })();
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", Favicon.iniciar);
+  else Favicon.iniciar();
+
   window.CriaDigi = {
     API, FORMATOS, PAPEIS_COR, MODELOS, proporcaoIA,
     esc, $, $$, uid, toast, espera,
     arquivoParaDataURL, carregarImagem, reduzirParaBase64, carregarFontes,
-    montarCabecalho, telaLogin, lum, definirTema, abrirLogin, definirDominios,
+    montarCabecalho, telaLogin, lum, definirTema, abrirLogin, definirDominios, Favicon,
   };
 })();

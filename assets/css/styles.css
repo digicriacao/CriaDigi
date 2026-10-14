@@ -255,6 +255,9 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--r
 /* ---------------------------------------------------------------- palco */
 .palco-topo { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
 .abas { display: flex; gap: 2px; border-bottom: 1px solid var(--line); }
+.palco-topo .abas { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.palco-topo .abas::-webkit-scrollbar { display: none; }
+.palco-topo .aba { white-space: nowrap; flex: none; }
 .aba {
   padding: 9px 14px; font-weight: 700; font-size: 14px; color: var(--ink-soft);
   border-bottom: 2px solid transparent; margin-bottom: -1px;
@@ -288,6 +291,42 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--r
 .g-prompt { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .g-data { font-size: 12px; color: var(--ink-soft); }
 .g-acoes { display: flex; gap: 6px; margin-top: 8px; align-items: center; }
+.g-editada { color: var(--rosa); font-weight: 600; }
+
+/* ---------------------------------------------------------------- minhas conversas */
+.conversas-lista { display: flex; flex-direction: column; gap: 8px; max-width: 760px; }
+.conversa-item {
+  display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 14px; background: var(--surface);
+  border: 1px solid var(--line-soft); border-radius: var(--raio-sm); cursor: pointer; text-align: left;
+  transition: border-color .15s, box-shadow .15s;
+}
+.conversa-item:hover, .conversa-item:focus-visible { border-color: var(--rosa); box-shadow: var(--sombra); outline: none; }
+.conversa-item.atual { border-color: var(--rosa); }
+.conversa-icone { width: 34px; height: 34px; flex: none; border-radius: 50%; display: grid; place-items: center; background: var(--rosa-fundo); color: var(--rosa); }
+.conversa-texto { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.conversa-titulo { font-weight: 600; font-size: 14.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversa-data, .conversa-email { font-size: 12.5px; color: var(--ink-soft); }
+.msg-extras { font-size: 12px; opacity: .8; margin-top: 4px; }
+
+/* admin: criações e conversas de todo mundo */
+.busca-admin { display: flex; gap: 8px; margin-bottom: 14px; max-width: 520px; }
+.busca-admin input { flex: 1; }
+.admin-criacoes { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+.admin-criacao { background: var(--surface); border: 1px solid var(--line-soft); border-radius: var(--raio-sm); overflow: hidden; display: flex; flex-direction: column; }
+.admin-criacao img { width: 100%; aspect-ratio: 1; object-fit: cover; background: var(--line-soft); display: block; }
+.admin-criacao .info { padding: 9px 11px 11px; display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; min-width: 0; }
+.admin-criacao .info b { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.admin-criacao .info span { color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.admin-criacao .acoes { display: flex; gap: 6px; margin-top: 8px; }
+.transcricao { display: flex; flex-direction: column; gap: 10px; max-height: 62vh; overflow: auto; padding: 4px 2px; }
+.transcricao .t-msg { max-width: 86%; padding: 9px 12px; border-radius: 12px; font-size: 14px; line-height: 1.45; }
+.transcricao .t-eu { align-self: flex-end; background: var(--rosa); color: #fff; }
+.transcricao .t-ia { align-self: flex-start; background: var(--bg); border: 1px solid var(--line-soft); }
+.transcricao .t-erro { background: var(--rosa-fundo); color: var(--rosa-escuro); }
+.transcricao .t-imgs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.transcricao .t-imgs a, .transcricao .t-imgs span { display: block; width: 92px; }
+.transcricao .t-imgs img { width: 92px; height: 92px; object-fit: cover; border-radius: 8px; display: block; }
+.transcricao .t-hora { font-size: 11px; opacity: .7; margin-top: 4px; }
 
 /* ---------------------------------------------------------------- editor */
 .editor-barra { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
@@ -699,3 +738,16 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--r
   .tpl-editor { grid-template-columns: 1fr; }
   .tpl-editor-tela { position: static; }
 }
+
+/* ---------------------------------------------------------------- template: preparar foto com IA */
+.btn-ia { margin-top: 12px; color: var(--rosa); border-color: var(--rosa); gap: 6px; }
+.btn-ia:hover:not(:disabled) { background: var(--rosa-fundo); border-color: var(--rosa); }
+.btn-ia[aria-expanded="true"] { background: var(--rosa-fundo); }
+.tpl-ia-opcoes { display: grid; gap: 6px; margin-top: 8px; }
+.opcao-ia {
+  display: grid; gap: 2px; text-align: left; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface); font-size: 13px; color: var(--ink-soft); line-height: 1.35;
+}
+.opcao-ia b { color: var(--ink); font-size: 14px; }
+.opcao-ia:hover { border-color: var(--rosa); background: var(--rosa-fundo); }
+.opcao-ia:hover b { color: var(--rosa); }

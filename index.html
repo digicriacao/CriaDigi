@@ -14,7 +14,7 @@
     document.documentElement.setAttribute("data-theme", t);
   })();
 </script>
-<link rel="icon" type="image/png" href="logo-rosa.png">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800;900&family=Poppins:wght@500;600&display=swap" rel="stylesheet">
@@ -63,6 +63,7 @@
           <button role="tab" class="aba on" data-aba="resultados" aria-selected="true">Resultados</button>
           <button role="tab" class="aba" data-aba="templates" aria-selected="false">Templates</button>
           <button role="tab" class="aba" data-aba="galeria" aria-selected="false">Minhas criações</button>
+          <button role="tab" class="aba" data-aba="conversas" aria-selected="false">Minhas conversas</button>
         </div>
         <label class="btn btn-sm btn-ghost">
           <input type="file" id="abrir-local" accept="image/*" hidden>
@@ -81,6 +82,8 @@
       </div>
 
       <div id="galeria" class="grade" hidden></div>
+
+      <div id="conversas" class="grade" hidden></div>
 
       <div id="templates" hidden>
         <div class="chips" id="tpl-categorias" role="tablist" aria-label="Categorias"></div>
@@ -103,6 +106,7 @@
           <button type="button" class="btn btn-sm btn-ghost" id="voltar">← Voltar</button>
           <span class="editor-info" id="editor-info"></span>
           <div class="editor-acoes">
+            <button type="button" class="btn btn-sm btn-primario" id="salvar-edicao" hidden>Salvar em Minhas criações</button>
             <button type="button" class="icone" id="desfazer" title="Desfazer (Ctrl+Z)" aria-label="Desfazer">
               <svg viewBox="0 0 24 24" width="18" height="18"><path d="M9 7H4V2M4 7a9 9 0 1 1-1 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>

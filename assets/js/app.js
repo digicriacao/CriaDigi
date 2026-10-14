@@ -6,7 +6,7 @@
 (function () {
   "use strict";
   const { API, FORMATOS, esc, $, $$, toast, carregarImagem, reduzirParaBase64,
-    carregarFontes, arquivoParaDataURL, montarCabecalho, lum, abrirLogin, definirDominios, uid } = window.CriaDigi;
+    carregarFontes, arquivoParaDataURL, montarCabecalho, lum, abrirLogin, definirDominios, uid, Favicon } = window.CriaDigi;
   const { Editor, POSICOES } = window.CriaDigiEditor;
   const Modelo = window.CriaDigiModelo;
 
@@ -29,6 +29,9 @@
     exp: { tipo: "image/png", qualidade: 0.9 },
     trava: true,
     templates: null, categoria: "Todas", tpl: null,
+    msgs: [],                // conversa atual, no formato salvo em "Minhas conversas"
+    conversaId: null,        // id da conversa salva (só com conta)
+    conversas: null,         // lista carregada na aba
   };
 
   let ed = null;
@@ -37,7 +40,7 @@
   async function iniciar() {
     // a criação é aberta; o login é opcional e serve para salvar as artes
     S.sessao = await API.sessao().catch(() => null);
-    montarCabecalho({ pagina: "criar", sessao: S.sessao, aoMinhasCriacoes: () => mostrarAba("galeria") });
+    montarCabecalho({ pagina: "criar", sessao: S.sessao, aoMinhasCriacoes: () => mostrarAba("galeria"), aoMinhasConversas: () => mostrarAba("conversas") });
     $("#app").hidden = false;
 
     try {
@@ -53,14 +56,16 @@
     S.formato = FORMATOS[0];   // o primeiro formato da lista do admin já vem marcado
 
     ed = new Editor($("#tela"), { aoMudar: sincronizarFerramentas, aoSelecionar: aoSelecionar });
-    carregarFontes(S.arquivos).then(() => { if (ed) ed.sujarBase(); if (S.tpl) desenharTpl(); });
-    carregarLogos();
+    const fontes = carregarFontes(S.arquivos).then(() => { if (ed) ed.sujarBase(); if (S.tpl) desenharTpl(); });
+    prontos = Promise.all([fontes, carregarLogos()]).catch(() => {});
 
     montarChat();
     montarOpcoes();
     montarFerramentas();
     montarTemplates();
+    montarConversas();
     ligarAtalhos();
+    abrirCriacaoDoLink();
   }
 
   // ================================================================ chat
@@ -76,10 +81,7 @@
     $("#limpar-foco").addEventListener("click", () => definirFoco(null));
     $("#nova-conversa").addEventListener("click", () => {
       if (S.gerando) return;
-      S.historico = []; definirFoco(null);
-      $$(".msg", $("#chat")).forEach((m) => m.remove());
-      $("#chat-vazio").hidden = false;
-      $("#nova-conversa").hidden = true;
+      limparChat();
       txt.focus();
     });
 
@@ -90,7 +92,12 @@
       const it = S.resultados.find((r) => String(r.id) === b.dataset.chatId);
       if (!it) return;
       if (ev.target.closest("[data-chat-editar]")) return abrirNoEditor(it);
-      definirFoco(it);
+      if (it.tplCampo && S.tpl && S.tpl.estado.fotos[it.tplCampo]) {
+        definirFoco(it, { campo: it.tplCampo });
+        aplicarNaFoto(it.tplCampo, it.url);
+      } else {
+        definirFoco(it);
+      }
       txt.focus();
     });
 
@@ -98,11 +105,22 @@
     atualizarAnexos();
   }
 
-  function definirFoco(it) {
+  function limparChat() {
+    S.historico = []; S.msgs = []; S.conversaId = null;
+    definirFoco(null);
+    $$(".msg", $("#chat")).forEach((m) => m.remove());
+    $("#chat-vazio").hidden = false;
+    $("#nova-conversa").hidden = true;
+  }
+
+  // tpl: { campo } quando a imagem em ajuste é a foto de um template aberto
+  function definirFoco(it, tpl = null) {
     S.foco = it;
+    S.focoTpl = it && tpl ? tpl : null;
     const box = $("#chat-foco");
     box.hidden = !it;
-    if (it) $("img", box).src = it.url;
+    if (it) $("img", box).src = it.preview || it.url;
+    $("span", box).textContent = S.focoTpl ? "Ajustando a foto do template" : "Ajustando esta imagem";
     $$("[data-chat-id]").forEach((b) => b.classList.toggle("foco", !!it && b.dataset.chatId === String(it.id)));
     $$(".cartao[data-id]", $("#resultados")).forEach((c) => c.classList.toggle("foco", !!it && c.dataset.id === String(it.id)));
     $("#prompt").placeholder = it ? "Peça um ajuste: “fundo mais claro”, “mais pessoas”…" : "Descreva a imagem ou peça um ajuste…";
@@ -130,9 +148,11 @@
   }
 
   function miniaturasChat(itens) {
+    itens = itens.filter((it) => it.url);
+    if (!itens.length) return "";
     return `<div class="msg-imagens">${itens.map((it) => `
       <button type="button" class="msg-img" data-chat-id="${esc(it.id)}" title="Selecionar para ajustar">
-        <img src="${esc(it.url)}" alt="" crossorigin="anonymous">
+        <img src="${esc(it.preview || it.url)}" data-src-id="${esc(it.id)}" alt="" crossorigin="anonymous">
         <span class="msg-img-editar" data-chat-editar title="Abrir no editor" aria-label="Abrir no editor">
           <svg viewBox="0 0 24 24" width="14" height="14"><path d="M4 20h4L19 9l-4-4L4 16v4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
         </span>
@@ -274,8 +294,10 @@
     $("#resultados").hidden = aba !== "resultados";
     $("#galeria").hidden = aba !== "galeria";
     $("#templates").hidden = aba !== "templates";
+    $("#conversas").hidden = aba !== "conversas";
     if (aba === "galeria") carregarGaleria();
     if (aba === "templates") carregarTemplates();
+    if (aba === "conversas") carregarConversas();
   }
 
   function abaAtual() {
@@ -296,9 +318,13 @@
     btn.disabled = true;
     btn.classList.add("carregando");
     btn.querySelector(".txt").textContent = S.quantidade > 1 ? `Gerando ${S.quantidade} variações…` : "Gerando…";
+    Favicon.ocupado(true);
 
     const formato = refinar && S.foco.formato ? S.foco.formato : S.formato;
     const foco = S.foco;
+    // ajuste da foto de um template aberto: o resultado volta para a moldura
+    const focoTpl = refinar && S.focoTpl && S.tpl && S.tpl.estado.fotos[S.focoTpl.campo] ? S.focoTpl : null;
+    const fotosPessoas = focoTpl ? [] : S.fotos;
     const usaBase = !refinar && S.base;
     const historicoAntes = [...S.historico];
 
@@ -306,12 +332,17 @@
     const anexos = [];
     if (refinar) anexos.push(`<img src="${esc(foco.url)}" alt="" title="Imagem em ajuste">`);
     if (usaBase) anexos.push(`<img src="${esc(S.base)}" alt="" title="Imagem de partida">`);
-    S.fotos.forEach((f) => anexos.push(`<img src="${esc(f.url)}" alt="" title="Foto de pessoa">`));
+    fotosPessoas.forEach((f) => anexos.push(`<img src="${esc(f.url)}" alt="" title="Foto de pessoa">`));
     addMsg(`${anexos.length ? `<div class="msg-anexos">${anexos.join("")}</div>` : ""}<p>${esc(prompt || "Criar a partir das imagens enviadas")}</p>`, "msg-eu");
+    const extras = [];
+    if (usaBase) extras.push("imagem de partida");
+    if (fotosPessoas.length) extras.push(`${fotosPessoas.length} foto${fotosPessoas.length > 1 ? "s" : ""} de pessoa${fotosPessoas.length > 1 ? "s" : ""}`);
+    S.msgs.push({ papel: "eu", texto: prompt || "Criar a partir das imagens enviadas", foco: refinar && guardavel(foco.url) ? foco.url : null, extras, quando: new Date().toISOString() });
+    const msgIa = { papel: "ia", texto: "", itens: [], formato: resumoFormato(formato), estilo: S.estilo?.nome || "", ajuste: refinar, quando: null };
     const resposta = addMsg(`<p class="msg-status"><span class="ponto-carregando"></span>${refinar ? "Ajustando a imagem…" : S.quantidade > 1 ? `Criando ${S.quantidade} variações…` : "Criando a imagem…"}</p>`, "msg-ia");
     txt.value = ""; txt.style.height = "";
 
-    mostrarAba("resultados");
+    if (!focoTpl) mostrarAba("resultados");
     $("#vazio")?.remove();
     const lote = document.createElement("div");
     lote.className = "lote";
@@ -321,7 +352,7 @@
 
     try {
       const base = refinar ? await reduzirParaBase64(foco.url) : usaBase ? await reduzirParaBase64(S.base) : null;
-      const fotos = await Promise.all(S.fotos.map((f) => reduzirParaBase64(f.url, 1024)));
+      const fotos = await Promise.all(fotosPessoas.map((f) => reduzirParaBase64(f.url, 1024)));
       const r = await API.gerar({
         prompt,
         historico: historicoAntes,
@@ -333,16 +364,51 @@
         base,
         base_tipo: refinar ? "refinar" : "partir",
         fotos,
+        textos_atuais: refinar && foco.copy ? foco.copy : [],
+        posicao_atual: refinar && foco.posicao ? foco.posicao : null,
+        sem_textos: !!focoTpl,
       });
-      const itens = r.imagens.map((im) => ({ ...im, formato, prompt }));
-      S.resultados.unshift(...itens);
       if (prompt) S.historico.push(prompt);
+
+      // ajuste só de texto: mesma imagem, textos novos (não gasta crédito)
+      if (r.gerou_imagem === false) {
+        const novo = { ...foco, id: "txt-" + Date.now(), prompt, copy: r.textos || [], posicao: r.posicao || foco.posicao, preview: null };
+        S.resultados.unshift(novo);
+        $(".lote-topo .tag-ajuste", lote).textContent = "Texto";
+        $(".lote-grade", lote).innerHTML = cartaoResultado(novo, formato);
+        resposta.innerHTML = `<p>${esc(r.resposta || "Textos atualizados.")}</p>${miniaturasChat([novo])}`;
+        Object.assign(msgIa, { texto: r.resposta || "Textos atualizados.", itens: [paraGuardar(novo)], tipo: "texto" });
+        definirFoco(novo);
+        await comporArte(novo);
+        definirFoco(novo);
+        return;
+      }
+
+      const itens = r.imagens.map((im) => ({
+        ...im, formato, prompt, tplCampo: focoTpl ? focoTpl.campo : undefined,
+        copy: r.textos || (refinar && foco.copy ? foco.copy : null),
+        posicao: r.posicao || (refinar ? foco.posicao : null),
+      }));
+      S.resultados.unshift(...itens);
       $(".lote-grade", lote).innerHTML = itens.map((it) => cartaoResultado(it, formato)).join("");
       $(".lote-meta", lote).insertAdjacentHTML("beforeend", r.salvo
         ? ` · <span class="selo-salvo">Salvo</span>`
         : ` · <span class="selo-nao-salvo" title="Baixe agora ou entre na sua conta para salvar as próximas">Não salvo</span>`);
-      resposta.innerHTML = `<p>${itens.length > 1 ? `Pronto, ${itens.length} variações.` : "Pronto."} ${itens.length > 1 ? "Escolha uma" : "Continue"} e peça ajustes aqui, ou clique no lápis para abrir no editor.</p>${miniaturasChat(itens)}`;
-      definirFoco(itens[0]);
+      msgIa.itens = itens.map(paraGuardar);
+      msgIa.salvo = !!r.salvo;
+      if (focoTpl) {
+        msgIa.texto = "Pronto, já coloquei na arte.";
+        resposta.innerHTML = `<p>Pronto, já coloquei na arte.${itens.length > 1 ? " Clique em outra variação para trocar." : ""} Continue pedindo ajustes se quiser.</p>${miniaturasChat(itens)}`;
+        definirFoco(itens[0], focoTpl);
+        await aplicarNaFoto(focoTpl.campo, itens[0].url);
+      } else {
+        const fala = r.resposta ? esc(r.resposta) + " " : "";
+        resposta.innerHTML = `<p>${fala}${itens.length > 1 ? `${r.resposta ? "" : `Pronto, ${itens.length} variações. `}Escolha uma` : r.resposta ? "Continue" : "Pronto. Continue"} e peça ajustes aqui, ou clique no lápis para abrir no editor.</p>${miniaturasChat(itens)}`;
+        msgIa.texto = r.resposta || (itens.length > 1 ? `Pronto, ${itens.length} variações.` : "Pronto.");
+        definirFoco(itens[0]);
+        await Promise.all(itens.map(comporArte));
+        definirFoco(S.foco);
+      }
       if (typeof r.restante_hora === "number" && !r.salvo && r.restante_hora <= 3) {
         toast(r.restante_hora > 0 ? `Sem login, você ainda pode gerar ${r.restante_hora} imagem(ns) nesta hora.` : "Você usou o limite desta hora sem login. Entre na sua conta para gerar mais.", "aviso", 6000);
       }
@@ -351,13 +417,18 @@
       $(".lote-grade", lote).innerHTML = `<div class="erro-lote">${esc(e.message)}</div>`;
       resposta.classList.add("msg-erro");
       resposta.innerHTML = `<p>${esc(e.message)}</p>`;
+      Object.assign(msgIa, { texto: e.message, erro: true });
       if (prompt) { txt.value = prompt; }
     } finally {
       S.gerando = false;
       btn.disabled = false;
       btn.classList.remove("carregando");
       btn.querySelector(".txt").textContent = "Gerar imagens";
+      Favicon.ocupado(false);
       resposta.scrollIntoView({ block: "end", behavior: "smooth" });
+      msgIa.quando = new Date().toISOString();
+      S.msgs.push(msgIa);
+      salvarConversaAtual();
     }
   }
 
@@ -365,7 +436,7 @@
 
   function cartaoResultado(it, formato) {
     return `<figure class="cartao" data-id="${esc(it.id)}">
-      <img src="${esc(it.url)}" alt="${esc(it.prompt || "Imagem gerada")}" loading="lazy" crossorigin="anonymous" style="aspect-ratio:${proporcaoCss(formato.prop)}">
+      <img src="${esc(it.preview || it.url)}" data-src-id="${esc(it.id)}" alt="${esc(it.prompt || "Imagem gerada")}" loading="lazy" crossorigin="anonymous" style="aspect-ratio:${proporcaoCss(formato.prop)}">
       <figcaption>
         <button type="button" class="btn btn-sm btn-primario" data-acao="editar">Editar</button>
         <button type="button" class="btn btn-sm btn-claro" data-acao="ajustar">Ajustar no chat</button>
@@ -380,7 +451,7 @@
     if (!card) return;
     const it = S.resultados.find((r) => String(r.id) === card.dataset.id);
     if (!it) return;
-    if (b && b.dataset.acao === "baixar-original") return baixarUrl(it.url, nomeBase(it) + ".jpg");
+    if (b && b.dataset.acao === "baixar-original") return baixarUrl(it.preview || it.url, nomeBase(it) + ".jpg");
     if (b && b.dataset.acao === "ajustar") { definirFoco(it); $("#prompt").focus(); return; }
     abrirNoEditor(it);
   });
@@ -409,7 +480,7 @@
           <img src="${esc(it.url)}" alt="${esc(it.prompt || "")}" loading="lazy" crossorigin="anonymous">
           <figcaption>
             <span class="g-prompt" title="${esc(it.prompt || "")}">${esc(it.prompt || "Sem descrição")}</span>
-            <span class="g-data">${new Date(it.criado_em).toLocaleDateString("pt-BR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
+            <span class="g-data">${new Date(it.criado_em).toLocaleDateString("pt-BR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}${it.editado_por ? ` · <span class="g-editada" title="Editada por ${esc(it.editado_por)}">${it.editado_por === (S.sessao && S.sessao.email) ? "Editada" : "Editada pelo admin"}</span>` : ""}</span>
             <span class="g-acoes">
               <button type="button" class="btn btn-sm btn-primario" data-acao="editar">Editar</button>
               <button type="button" class="btn btn-sm btn-ghost" data-acao="ajustar">Ajustar no chat</button>
@@ -435,14 +506,172 @@
       try { await API.apagarGeracao(it); card.remove(); toast("Arte apagada.", "ok"); } catch (e) { toast(e.message, "erro"); }
       return;
     }
-    const formato = FORMATOS.find((f) => f.id === it.formato) || null;
-    const item = { ...it, formato };
+    const formato = formatoDe(it.formato);
+    const item = { ...it, formato, copy: it.textos && it.textos.textos ? it.textos.textos : null, posicao: it.textos ? it.textos.posicao : null };
     if (b && b.dataset.acao === "ajustar") {
       if (!S.resultados.some((r) => r.id === item.id)) S.resultados.push(item);
       definirFoco(item); $("#prompt").focus(); return;
     }
     abrirNoEditor(item);
   });
+
+  // ================================================================ minhas conversas
+  // Só quem tem conta guarda conversas. Imagens entram pelo endereço salvo
+  // (nada de imagem embutida no banco); o que não foi salvo some da conversa.
+  function guardavel(url) {
+    if (!url) return false;
+    if (/^https?:/i.test(url)) return true;
+    return API.demo && /^data:image\//.test(url) && url.length < 600_000;
+  }
+  function resumoFormato(f) { return f ? { id: f.id, nome: f.nome, prop: f.prop, w: f.w, h: f.h } : null; }
+  function paraGuardar(it) {
+    return {
+      id: String(it.id), url: guardavel(it.url) ? it.url : null, prompt: it.prompt || "",
+      formato: resumoFormato(it.formato), copy: it.copy || null, posicao: it.posicao || null,
+      tplCampo: it.tplCampo || undefined,
+    };
+  }
+
+  let avisouFalhaConversa = false;
+  let salvandoConversa = Promise.resolve();
+  function salvarConversaAtual() {
+    if (!S.conta || !S.msgs.length) return;
+    const primeira = S.msgs.find((m) => m.papel === "eu");
+    const titulo = (primeira ? primeira.texto : "Conversa").replace(/\s+/g, " ").trim().slice(0, 90);
+    const dados = { titulo, mensagens: JSON.parse(JSON.stringify(S.msgs)), historico: [...S.historico] };
+    // em fila: a primeira gravação cria a conversa, as seguintes atualizam
+    salvandoConversa = salvandoConversa.then(async () => {
+      try {
+        S.conversaId = await API.salvarConversa({ id: S.conversaId, ...dados });
+        S.conversas = null;
+      } catch (e) {
+        console.warn("Conversa não salva:", e);
+        if (!avisouFalhaConversa) { avisouFalhaConversa = true; toast("Não consegui salvar esta conversa: " + e.message, "aviso", 6000); }
+      }
+    });
+  }
+
+  function montarConversas() {
+    const box = $("#conversas");
+    box.addEventListener("click", async (ev) => {
+      const card = ev.target.closest("[data-cid]");
+      if (!card) return;
+      const id = card.dataset.cid;
+      if (ev.target.closest("[data-acao='apagar']")) {
+        if (!confirm("Apagar esta conversa? As artes salvas continuam em Minhas criações.")) return;
+        try {
+          await API.apagarConversa(id);
+          if (S.conversaId === id) S.conversaId = null;
+          card.remove();
+          S.conversas = (S.conversas || []).filter((c) => c.id !== id);
+          if (!S.conversas.length) carregarConversas();
+          toast("Conversa apagada.", "ok");
+        } catch (e) { toast(e.message, "erro"); }
+        return;
+      }
+      abrirConversa(id);
+    });
+  }
+
+  function quandoFoi(iso) {
+    const d = new Date(iso);
+    if (isNaN(d)) return "";
+    const hoje = new Date();
+    const ontem = new Date(Date.now() - 86400_000);
+    const hora = d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+    if (d.toDateString() === hoje.toDateString()) return "Hoje, " + hora;
+    if (d.toDateString() === ontem.toDateString()) return "Ontem, " + hora;
+    return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: d.getFullYear() === hoje.getFullYear() ? undefined : "numeric" }) + ", " + hora;
+  }
+
+  async function carregarConversas() {
+    const box = $("#conversas");
+    if (!S.conta) {
+      box.innerHTML = `<div class="vazio">
+        <div class="vazio-icone" aria-hidden="true"><svg viewBox="0 0 48 48" width="48" height="48"><path d="M8 10h32v22H20l-8 7v-7H8z" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/></svg></div>
+        <h3>${S.sessao ? "Esta conta não salva conversas" : "Entre para guardar suas conversas"}</h3>
+        <p>${S.sessao
+          ? `As conversas ficam salvas só para contas com e-mail ${esc(API.dominiosDe(S.marca).map((d) => "@" + d).join(" ou "))}.`
+          : "Com uma conta, cada conversa com a IA fica guardada aqui para você voltar e continuar de onde parou."}</p>
+        ${S.sessao ? "" : `<div class="linha-botoes" style="justify-content:center"><button type="button" class="btn btn-primario" data-ir="entrar">Entrar</button><button type="button" class="btn btn-ghost" data-ir="criar">Criar conta</button></div>`}
+      </div>`;
+      return;
+    }
+    box.innerHTML = `<p class="ajuda">Carregando…</p>`;
+    try {
+      await salvandoConversa;
+      const lista = await API.conversas();
+      S.conversas = lista;
+      if (!lista.length) {
+        box.innerHTML = `<div class="vazio"><h3>Nenhuma conversa ainda</h3><p>Cada conversa com a IA fica guardada aqui. Para começar outra, use “Nova conversa” no chat.</p></div>`;
+        return;
+      }
+      box.innerHTML = `<div class="conversas-lista">${lista.map((c) => `
+        <div class="conversa-item ${c.id === S.conversaId ? "atual" : ""}" data-cid="${esc(c.id)}" role="button" tabindex="0">
+          <span class="conversa-icone" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 5h16v11H10l-4 3v-3H4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></span>
+          <span class="conversa-texto">
+            <span class="conversa-titulo">${esc(c.titulo || "Conversa")}</span>
+            <span class="conversa-data">${esc(quandoFoi(c.atualizado_em || c.criado_em))}${c.id === S.conversaId ? " · aberta agora" : ""}</span>
+          </span>
+          <button type="button" class="icone" data-acao="apagar" title="Apagar conversa" aria-label="Apagar conversa">
+            <svg viewBox="0 0 24 24" width="16" height="16"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+          </button>
+        </div>`).join("")}</div>`;
+    } catch (e) {
+      box.innerHTML = `<div class="erro-lote">${esc(e.message)}</div>`;
+    }
+  }
+  $("#conversas").addEventListener("keydown", (ev) => {
+    if ((ev.key === "Enter" || ev.key === " ") && ev.target.matches("[data-cid]")) { ev.preventDefault(); ev.target.click(); }
+  });
+
+  // reabre uma conversa: chat, resultados e a última imagem selecionada para continuar
+  async function abrirConversa(id) {
+    if (S.gerando) return toast("Espere a imagem atual terminar.", "aviso");
+    let c;
+    try { c = await API.conversa(id); } catch (e) { return toast(e.message, "erro"); }
+    limparChat();
+    S.conversaId = S.sessao && c.user_id === S.sessao.id ? c.id : null;
+    S.msgs = Array.isArray(c.mensagens) ? c.mensagens : [];
+    S.historico = Array.isArray(c.historico) ? c.historico : [];
+
+    // resultados: um lote por resposta com imagem
+    $$("#resultados .lote").forEach((l) => l.remove());
+    $("#vazio")?.remove();
+    const novos = [];
+    let ultimoEu = null, ultimo = null;
+    for (const m of S.msgs) {
+      if (m.papel === "eu") {
+        ultimoEu = m;
+        const anexo = m.foco ? `<div class="msg-anexos"><img src="${esc(m.foco)}" alt="" title="Imagem em ajuste"></div>` : "";
+        const extras = m.extras && m.extras.length ? `<p class="msg-extras">+ ${esc(m.extras.join(" e "))}</p>` : "";
+        addMsg(`${anexo}<p>${esc(m.texto || "")}</p>${extras}`, "msg-eu");
+        continue;
+      }
+      const itens = (m.itens || []).filter((x) => x.url).map((x) => ({ ...x, formato: formatoDe(x.formato) || x.formato || null }));
+      const perdidos = (m.itens || []).length - itens.length;
+      novos.push(...itens);
+      const aviso = perdidos ? `<p class="msg-extras">${perdidos} imagem(ns) desta resposta não ficaram salvas.</p>` : "";
+      const el = addMsg(`<p>${esc(m.texto || "")}</p>${aviso}${miniaturasChat(itens)}`, "msg-ia" + (m.erro ? " msg-erro" : ""));
+      el.scrollIntoView({ block: "end" });
+      if (itens.length) {
+        const f = itens[0].formato || m.formato || FORMATOS[0];
+        const lote = document.createElement("div");
+        lote.className = "lote";
+        lote.innerHTML = `<div class="lote-topo"><p class="lote-prompt">${m.ajuste ? `<span class="tag-ajuste">${m.tipo === "texto" ? "Texto" : "Ajuste"}</span> ` : ""}${esc(ultimoEu ? ultimoEu.texto : "")}</p><span class="lote-meta">${esc(f.nome || "")}${m.estilo ? " · " + esc(m.estilo) : ""}</span></div>
+          <div class="lote-grade">${itens.map((it) => cartaoResultado(it, f.prop ? f : { prop: "1:1" })).join("")}</div>`;
+        $("#resultados").prepend(lote);
+        ultimo = itens[0];
+      }
+    }
+    // mantém os itens de outras conversas acessíveis só se ainda estão na tela
+    S.resultados = novos.reverse();
+    mostrarAba("resultados");
+    if (ultimo) definirFoco(ultimo);
+    Promise.all(novos.filter((it) => it.copy && it.copy.length).map(comporArte)).then(() => definirFoco(S.foco));
+    if (!S.conversaId) toast("Você está vendo a conversa de outra pessoa. Se continuar, vira uma conversa nova na sua conta.", "info", 7000);
+    if (window.innerWidth <= 900) $("#chat").scrollIntoView({ block: "start" });
+  }
 
   // ================================================================ editor
   async function abrirNoEditor(it, { semLogo = false } = {}) {
@@ -460,10 +689,20 @@
       ed.sel = null;
       await ed.carregar(it.url, it.formato);
       if (semLogo) ed.logo = { ...ed.logo, id: null }; else aplicarLogoPadrao();
+      if (it.copy && it.copy.length) {
+        if (!it.camadas) await comporArte(it);
+        if (it.camadas) {
+          ed.textos = JSON.parse(JSON.stringify(it.camadas.textos));
+          ed.degrade = { ...it.camadas.degrade };
+          if (!semLogo && it.camadas.logo) ed.logo = { ...it.camadas.logo };
+          ed.sujarBase();
+        }
+      }
       ed.marcar();
       ed.historico = [ed.historico[ed.historico.length - 1]];
       $("#exp-nome").value = nomeBase(it);
       $(".refinar").hidden = !!it.semIA;
+      atualizarBotaoSalvar();
       sincronizarFerramentas();
       aoSelecionar(null);
       mostrarFerr("formato");
@@ -490,6 +729,74 @@
     }
   }
   $("#voltar").addEventListener("click", () => fecharEditor(true));
+  $("#salvar-edicao").addEventListener("click", salvarEdicao);
+
+  // ================================================================ salvar a edição
+  function donoDaEdicao() {
+    const it = S.aberto;
+    if (!S.sessao || !it) return null;
+    if (it.dono && it.dono.id !== S.sessao.id) return S.sessao.admin ? it.dono : null;   // admin ajudando alguém
+    return S.conta ? { id: S.sessao.id, email: S.sessao.email } : null;
+  }
+  function atualizarBotaoSalvar() {
+    const b = $("#salvar-edicao");
+    const dono = donoDaEdicao();
+    b.hidden = !dono;
+    if (!dono) return;
+    const outro = dono.id !== S.sessao.id;
+    b.textContent = outro ? `Salvar na conta de ${dono.email.split("@")[0]}` : "Salvar em Minhas criações";
+    b.title = outro ? `Salva a arte editada em Minhas criações de ${dono.email}` : "Salva a arte editada na sua conta";
+  }
+  async function salvarEdicao() {
+    const dono = donoDaEdicao();
+    if (!dono || !ed.temImagem) return;
+    const b = $("#salvar-edicao");
+    const rotulo = b.textContent;
+    b.disabled = true; b.textContent = "Salvando…";
+    try {
+      const it = S.aberto;
+      const blob = await ed.exportar("image/jpeg", 0.92);
+      const r = await API.salvarEdicao(blob, {
+        dono_id: dono.id, dono_email: dono.email, prompt: it.prompt || "Arte editada",
+        formato: it.formato ? it.formato.id : null, estilo: it.estilo || null, origem: it.origemId || it.id,
+      });
+      S.galeria = null;
+      toast(dono.id === S.sessao.id ? "Salvo em Minhas criações." : `Salvo nas criações de ${dono.email}.`, "ok");
+      it.salvoId = r.id;
+    } catch (e) {
+      toast("Não consegui salvar: " + e.message, "erro", 7000);
+    } finally {
+      b.disabled = false; b.textContent = rotulo;
+    }
+  }
+
+  // ?criacao=<id>: abre uma criação no editor (a própria ou, para o admin, a de qualquer pessoa)
+  async function abrirCriacaoDoLink() {
+    const id = new URLSearchParams(location.search).get("criacao");
+    if (!id) return;
+    if (!S.sessao) {
+      toast("Entre na sua conta para abrir esta criação.", "aviso", 6000);
+      abrirLogin("entrar");
+      return;
+    }
+    try {
+      const g = await API.criacao(id);
+      const item = {
+        ...g, formato: formatoDe(g.formato), dono: { id: g.user_id, email: g.email || "" },
+        copy: g.textos && g.textos.textos ? g.textos.textos : null, posicao: g.textos ? g.textos.posicao : null,
+      };
+      await abrirNoEditor(item);
+      if (item.dono.id !== S.sessao.id) toast(`Você está editando a arte de ${item.dono.email}. Ao salvar, a versão editada vai para as criações dessa pessoa.`, "info", 8000);
+    } catch (e) {
+      toast(e.message, "erro", 7000);
+    }
+  }
+
+  function formatoDe(v) {
+    if (!v) return null;
+    if (typeof v === "object") return FORMATOS.find((f) => f.id === v.id) || (v.w && v.h && v.prop ? v : null);
+    return FORMATOS.find((f) => f.id === v) || null;
+  }
 
 
   function nomeBase(it) {
@@ -503,22 +810,189 @@
   // logos da marca
   function logosAtivos() { return S.arquivos.filter((a) => a.tipo === "logo" && a.ativo !== false); }
 
-  function carregarLogos() {
-    for (const l of logosAtivos()) {
-      carregarImagem(l.url).then((img) => { ed.registrarLogo(l.id, img); ed.desenhar(); })
-        .catch(() => console.warn("Logo não carregou", l.nome));
+  // ================================================================ textos editáveis na arte
+  // A IA devolve só o conteúdo ({ tipo, texto }) e a posição. Aqui isso vira
+  // camadas do editor, com as fontes e cores da marca, e uma prévia já montada.
+  const LOGOS = new Map();   // id -> HTMLImageElement
+  let prontos = Promise.resolve();
+
+  function pesoDaFonte(nome, preferido) {
+    const pesos = S.arquivos.filter((a) => a.tipo === "fonte" && a.ativo !== false && a.nome === nome).map((a) => Number(a.peso) || 400);
+    if (!pesos.length) return preferido;
+    return pesos.reduce((m, p) => (Math.abs(p - preferido) < Math.abs(m - preferido) ? p : m), pesos[0]);
+  }
+
+  function quebrarLinhas(ctx, texto, maxW) {
+    const saida = [];
+    for (const par of String(texto).split("\n")) {
+      const palavras = par.split(/\s+/).filter(Boolean);
+      if (!palavras.length) { saida.push(""); continue; }
+      let linha = palavras[0];
+      for (let i = 1; i < palavras.length; i++) {
+        const t = linha + " " + palavras[i];
+        if (ctx.measureText(t).width <= maxW) linha = t; else { saida.push(linha); linha = palavras[i]; }
+      }
+      saida.push(linha);
+    }
+    return saida;
+  }
+
+  // luminosidade média (0 a 1) de uma área da imagem, já recortada no formato da arte
+  function luminosidade(img, W, H, area) {
+    const c = document.createElement("canvas");
+    c.width = 64; c.height = Math.max(8, Math.round(64 * H / W));
+    const x = c.getContext("2d", { willReadFrequently: true });
+    const iw = img.naturalWidth, ih = img.naturalHeight;
+    const k = Math.max(W / iw, H / ih);
+    const sw = W / k, sh = H / k;
+    x.drawImage(img, (iw - sw) / 2, (ih - sh) / 2, sw, sh, 0, 0, c.width, c.height);
+    const rx = Math.max(0, Math.floor(area.x0 * c.width)), ry = Math.max(0, Math.floor(area.y0 * c.height));
+    const rw = Math.max(1, Math.min(c.width - rx, Math.ceil((area.x1 - area.x0) * c.width)));
+    const rh = Math.max(1, Math.min(c.height - ry, Math.ceil((area.y1 - area.y0) * c.height)));
+    const d = x.getImageData(rx, ry, rw, rh).data;
+    let soma = 0;
+    for (let i = 0; i < d.length; i += 4) soma += (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
+    return soma / (d.length / 4);
+  }
+
+  function corDaMarca(papel, alternativa) {
+    const c = S.cores.find((x) => x.papel === papel);
+    return c ? c.hex : alternativa;
+  }
+
+  function calcularCamadas(copy, posicao, img, W, H) {
+    const a = W / H;
+    const tam = a > 2.4 ? { titulo: 4.6, subtitulo: 2.2, chamada: 1.9 }
+      : a > 1.3 ? { titulo: 7.8, subtitulo: 3.4, chamada: 2.8 }
+      : a < 0.9 ? { titulo: 10, subtitulo: 4.8, chamada: 3.9 }
+      : { titulo: 9, subtitulo: 4.3, chamada: 3.5 };
+    const fTitulo = fontePara("titulo"), fTexto = fontePara("texto");
+    const estilos = {
+      titulo: { fonte: fTitulo, peso: pesoDaFonte(fTitulo, 700), tamanho: tam.titulo, caixaAlta: false },
+      subtitulo: { fonte: fTexto, peso: pesoDaFonte(fTexto, 300), tamanho: tam.subtitulo, caixaAlta: false },
+      chamada: { fonte: fTitulo, peso: pesoDaFonte(fTitulo, 700), tamanho: tam.chamada, caixaAlta: true },
+    };
+    const pos = ["topo", "base", "esquerda", "centro"].includes(posicao) ? posicao : "topo";
+    const centro = pos === "centro";
+    const largura = pos === "esquerda" ? 0.52 : centro ? 0.84 : 0.8;
+    const x = centro ? 0.08 : 0.07;
+    const alinhar = centro ? "center" : "left";
+
+    // mede cada bloco para empilhar sem sobrepor
+    const ctx = document.createElement("canvas").getContext("2d");
+    const blocos = copy.map((t) => {
+      const e = estilos[t.tipo] || estilos.subtitulo;
+      const px = W * e.tamanho / 100;
+      ctx.font = `${e.peso} ${px}px "${e.fonte}", "Hanken Grotesk", sans-serif`;
+      const texto = e.caixaAlta ? t.texto.toLocaleUpperCase("pt-BR") : t.texto;
+      const linhas = quebrarLinhas(ctx, texto, largura * W).length;
+      const alt = t.tipo === "chamada" ? px * 1.5 : linhas * px * 1.12;
+      return { t, e, px, alt };
+    });
+    const gap = (i) => (i ? blocos[i - 1].px * 0.45 : 0);
+    const total = blocos.reduce((s, b, i) => s + b.alt + gap(i), 0);
+    const my = 0.07 * Math.min(W, H);
+    const logoInf = String(S.marca?.logo_posicao || "inf-dir").startsWith("inf") && logosAtivos().length;
+    const reservaLogo = logoInf ? ((S.marca?.logo_tamanho || 16) / 100) * W * 0.62 + my * 0.4 : 0;
+    let y0 = pos === "topo" ? my
+      : pos === "base" ? H - my - reservaLogo - total
+      : (H - total) / 2;
+    y0 = Math.max(my * 0.5, y0);
+
+    // cor do texto conforme o fundo da área
+    const area = { x0: x, x1: x + largura, y0: y0 / H, y1: Math.min(1, (y0 + total) / H) };
+    const lum = luminosidade(img, W, H, area);
+    const branco = "#FFFFFF";
+    const escuro = corDaMarca("texto", "#232323");
+    const pink = corDaMarca("principal", "#EA0356");
+    let degrade = { cor: escuro, forca: 0, lado: "baixo" };
+    let corTitulo, corTexto;
+    if (lum > 0.62) { corTitulo = pink; corTexto = escuro; }
+    else if (lum < 0.4) { corTitulo = branco; corTexto = branco; }
+    else {
+      corTitulo = branco; corTexto = branco;
+      degrade = { cor: escuro, forca: 70, lado: pos === "topo" ? "cima" : pos === "esquerda" ? "esquerda" : "baixo" };
+    }
+
+    let y = y0;
+    const textos = blocos.map((b, i) => {
+      y += gap(i);
+      const camada = {
+        id: uid(), texto: b.t.texto, papel: b.t.tipo,
+        fonte: b.e.fonte, peso: b.e.peso, tamanho: b.e.tamanho, caixaAlta: b.e.caixaAlta,
+        cor: b.t.tipo === "titulo" ? corTitulo : b.t.tipo === "chamada" ? branco : corTexto,
+        fundo: b.t.tipo === "chamada" ? pink : null,
+        alinhar, largura, x: b.t.tipo === "chamada" && !centro ? x + 0.006 : x, y: y / H,
+      };
+      y += b.alt;
+      return camada;
+    });
+    return { textos, degrade };
+  }
+
+  // monta a prévia (imagem + textos + logo) igual ao que o editor abre
+  async function comporArte(it) {
+    if (!it.copy || !it.copy.length) { it.preview = null; it.camadas = null; return; }
+    try {
+      await prontos;
+      const img = await carregarImagem(it.url);
+      const W = it.formato ? it.formato.w : img.naturalWidth;
+      const H = it.formato ? it.formato.h : img.naturalHeight;
+      it.camadas = calcularCamadas(it.copy, it.posicao, img, W, H);
+      it.camadas.logo = logoParaFundo(img, W, H);
+      const e = new Editor(document.createElement("canvas"));
+      LOGOS.forEach((im, id) => e.registrarLogo(id, im));
+      await e.carregar(it.url, it.formato || null);
+      e.logo = { ...it.camadas.logo };
+      e.textos = JSON.parse(JSON.stringify(it.camadas.textos));
+      e.degrade = { ...it.camadas.degrade };
+      const blob = await e.exportar("image/jpeg", 0.9);
+      if (it.preview) URL.revokeObjectURL(it.preview);
+      it.preview = URL.createObjectURL(blob);
+      $$(`img[data-src-id="${CSS.escape(String(it.id))}"]`).forEach((im) => { im.src = it.preview; });
+    } catch (e) {
+      console.warn("Prévia com texto não montou:", e);
     }
   }
 
-  function aplicarLogoPadrao() {
+  // área que o logo ocupa (mesma regra do editor), em fração da arte
+  function areaDoLogo(logo, W, H) {
+    const img = LOGOS.get(logo.id);
+    if (!img) return null;
+    const lw = W * logo.tamanho / 100;
+    const lh = lw * img.naturalHeight / img.naturalWidth;
+    const m = Math.min(W, H) * 0.05;
+    const i = Math.max(0, POSICOES.indexOf(logo.pos));
+    const v = Math.floor(i / 3), hz = i % 3;
+    const x0 = hz === 0 ? m : hz === 1 ? (W - lw) / 2 : W - m - lw;
+    const y0 = v === 0 ? m : v === 1 ? (H - lh) / 2 : H - m - lh;
+    return { x0: x0 / W, y0: y0 / H, x1: (x0 + lw) / W, y1: (y0 + lh) / H };
+  }
+
+  // fundo escuro ou pink embaixo do logo: usa a versão clara (negativa), se existir
+  function logoParaFundo(img, W, H) {
+    const logo = logoPadrao();
+    const negativa = logosAtivos().find((l) => l.variante === "negativa");
+    if (!logo.id || !negativa || negativa.id === logo.id) return logo;
+    const area = areaDoLogo(logo, W, H);
+    if (!area) return logo;
+    return luminosidade(img, W, H, area) < 0.45 ? { ...logo, id: negativa.id } : logo;
+  }
+
+  function logoPadrao() {
     const logos = logosAtivos();
     const padrao = logos.find((l) => l.id === S.marca?.logo_padrao) || logos.find((l) => l.variante === "principal") || logos[0];
-    ed.logo = {
-      id: padrao ? padrao.id : null,
-      pos: S.marca?.logo_posicao || "inf-dir",
-      tamanho: S.marca?.logo_tamanho || 16,
-      x: null, y: null,
-    };
+    return { id: padrao ? padrao.id : null, pos: S.marca?.logo_posicao || "inf-dir", tamanho: S.marca?.logo_tamanho || 16, x: null, y: null };
+  }
+
+  function carregarLogos() {
+    return Promise.all(logosAtivos().map((l) => carregarImagem(l.url)
+      .then((img) => { LOGOS.set(l.id, img); ed.registrarLogo(l.id, img); ed.desenhar(); })
+      .catch(() => console.warn("Logo não carregou", l.nome))));
+  }
+
+  function aplicarLogoPadrao() {
+    ed.logo = logoPadrao();
     ed.desenhar();
   }
 
@@ -804,7 +1278,8 @@
     // barra
     $("#desfazer").disabled = !ed.podeDesfazer;
     $("#refazer").disabled = !ed.podeRefazer;
-    $("#editor-info").textContent = ed.temImagem ? `${ed.out.w} × ${ed.out.h} px` : "";
+    const dono = S.aberto && S.aberto.dono && S.sessao && S.aberto.dono.id !== S.sessao.id ? ` · arte de ${S.aberto.dono.email || "outra pessoa"}` : "";
+    $("#editor-info").textContent = ed.temImagem ? `${ed.out.w} × ${ed.out.h} px${dono}` : "";
     // formato
     const ativo = FORMATOS.find((f) => f.w === ed.out.w && f.h === ed.out.h);
     $$(".item-formato").forEach((b) => b.classList.toggle("on", !!ativo && b.dataset.id === ativo.id));
@@ -995,7 +1470,7 @@
     $("#tpl-uso").hidden = true;
     $("#palco-topo").hidden = false;
     painelDireito("opcoes");
-    if (voltarLista) { S.tpl = null; mostrarAba("templates"); }
+    if (voltarLista) { if (S.focoTpl) definirFoco(null); S.tpl = null; mostrarAba("templates"); }
   }
 
   function desenharTpl() {
@@ -1004,11 +1479,8 @@
     S.tpl.caixas = Modelo.desenhar(ctx, S.tpl.t, S.tpl.imgs, S.tpl.estado, { vagas: true });
   }
 
-  const ROTULO_IA = {
-    retrato: "A IA transforma a foto em um retrato profissional no padrão da arte.",
-    fundo: "A IA troca o fundo da foto para combinar com a arte.",
-    personalizado: "A IA prepara a foto para combinar com a arte.",
-  };
+  // a preparação com IA é opcional: o admin pode desligar por campo (ia = "nenhum")
+  const iaPermitida = (c) => c && c.ia !== "nenhum";
 
   function montarPainelTemplate() {
     const { t } = S.tpl;
@@ -1028,7 +1500,6 @@
       ${fotos.map((c) => `
         <div class="bloco caixa-opcao" data-tpl-foto="${c.id}">
           <span class="rotulo">${esc(c.rotulo || "Foto")}</span>
-          ${c.ia && c.ia !== "nenhum" ? `<p class="ajuda">${ROTULO_IA[c.ia] || ROTULO_IA.personalizado}</p>` : ""}
           <label class="soltar soltar-sm">
             <input type="file" accept="image/*" hidden data-tpl-arquivo="${c.id}">
             <span>Arraste a foto aqui ou <u>escolha</u></span>
@@ -1036,9 +1507,23 @@
           <div class="tpl-foto-estado" hidden></div>
           <div class="tpl-foto-ctrl" hidden>
             <label class="deslizador">Zoom <output>100%</output><input type="range" min="100" max="300" value="100" data-tpl-zoom="${c.id}"></label>
+            ${iaPermitida(c) ? `
+            <button type="button" class="btn btn-sm btn-ghost btn-largo btn-ia" data-tpl-ia="${c.id}" aria-expanded="false">
+              <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M12 2l1.8 5.2L19 9l-5.2 1.8L12 16l-1.8-5.2L5 9l5.2-1.8zM19 14l.9 2.6L22.5 17.5l-2.6.9L19 21l-.9-2.6-2.6-.9 2.6-.9z" fill="currentColor"/></svg>
+              Preparar a imagem com IA
+            </button>
+            <div class="tpl-ia-opcoes" data-tpl-opcoes="${c.id}" hidden>
+              <button type="button" class="opcao-ia" data-tpl-profissional="${c.id}">
+                <b>Padrão profissional</b>
+                <span>Retrato de busto com camiseta preta com o logo Digi, luz branca e fundo da arte.</span>
+              </button>
+              <button type="button" class="opcao-ia" data-tpl-prompt="${c.id}">
+                <b>Ajustar com prompt</b>
+                <span>Leva a foto para o chat ao lado para você pedir o que quiser.</span>
+              </button>
+            </div>` : ""}
             <div class="linha-botoes">
-              ${c.ia && c.ia !== "nenhum" ? `<button type="button" class="btn btn-sm btn-ghost" data-tpl-alternar="${c.id}">Ver foto original</button>
-              <button type="button" class="btn btn-sm btn-ghost" data-tpl-refazer="${c.id}">Refazer com IA</button>` : ""}
+              <button type="button" class="btn btn-sm btn-ghost" data-tpl-alternar="${c.id}" hidden>Ver foto original</button>
               <button type="button" class="btn btn-sm btn-perigo" data-tpl-remover="${c.id}">Remover</button>
             </div>
           </div>
@@ -1073,21 +1558,32 @@
         $$("#tpl-exp-tipo button").forEach((b) => b.classList.toggle("on", b === tipo));
         return;
       }
+      const ia = ev.target.closest("[data-tpl-ia]");
+      if (ia) {
+        const op = $(`[data-tpl-opcoes="${ia.dataset.tplIa}"]`);
+        op.hidden = !op.hidden;
+        ia.setAttribute("aria-expanded", String(!op.hidden));
+        return;
+      }
+      const prof = ev.target.closest("[data-tpl-profissional]");
+      if (prof) { fecharOpcoesIA(prof.dataset.tplProfissional); tratarFotoTemplate(prof.dataset.tplProfissional); return; }
+      const pr = ev.target.closest("[data-tpl-prompt]");
+      if (pr) { levarFotoAoChat(pr.dataset.tplPrompt); return; }
       const alt = ev.target.closest("[data-tpl-alternar]");
       if (alt) {
         const f = S.tpl.estado.fotos[alt.dataset.tplAlternar];
         if (!f || !f.tratada) return;
         f.img = f.img === f.tratada ? f.original : f.tratada;
-        alt.textContent = f.img === f.tratada ? "Ver foto original" : "Usar foto da IA";
+        atualizarBlocoFoto(alt.dataset.tplAlternar);
         desenharTpl();
         return;
       }
-      const ref = ev.target.closest("[data-tpl-refazer]");
-      if (ref) { tratarFotoTemplate(ref.dataset.tplRefazer); return; }
       const rem = ev.target.closest("[data-tpl-remover]");
       if (rem) {
-        delete S.tpl.estado.fotos[rem.dataset.tplRemover];
-        atualizarBlocoFoto(rem.dataset.tplRemover);
+        const id = rem.dataset.tplRemover;
+        delete S.tpl.estado.fotos[id];
+        if (S.focoTpl && S.focoTpl.campo === id) definirFoco(null);
+        atualizarBlocoFoto(id);
         desenharTpl();
         return;
       }
@@ -1101,39 +1597,79 @@
     });
   }
 
+  function fecharOpcoesIA(id) {
+    const op = $(`[data-tpl-opcoes="${id}"]`);
+    const bt = $(`[data-tpl-ia="${id}"]`);
+    if (op) op.hidden = true;
+    if (bt) bt.setAttribute("aria-expanded", "false");
+  }
+
   function campoTpl(id) { return (S.tpl.t.campos || []).find((c) => c.id === id); }
 
+  // ao enviar, usa a foto como veio; a IA só entra se a pessoa pedir
   async function usarFotoTemplate(id, file) {
     if (!file.type.startsWith("image/")) return toast("Escolha um arquivo de imagem.", "erro");
     const url = await arquivoParaDataURL(file);
     const img = await carregarImagem(url);
     S.tpl.estado.fotos[id] = { img, original: img, url, zoom: 1, dx: 0, dy: 0, tratada: null };
+    if (S.focoTpl && S.focoTpl.campo === id) definirFoco(null);
     atualizarBlocoFoto(id);
     desenharTpl();
-    const c = campoTpl(id);
-    if (c && c.ia && c.ia !== "nenhum") tratarFotoTemplate(id);
   }
 
+  // coloca a imagem preparada (pela IA ou pelo chat) na moldura
+  async function aplicarNaFoto(id, src) {
+    if (!S.tpl) return;
+    const f = S.tpl.estado.fotos[id];
+    if (!f) return;
+    const img = await carregarImagem(src);
+    Object.assign(f, { tratada: img, img, zoom: 1, dx: 0, dy: 0 });
+    atualizarBlocoFoto(id);
+    desenharTpl();
+  }
+
+  function proporcaoDoCampo(c) {
+    return window.CriaDigi.proporcaoIA(c.w * S.tpl.t.largura, c.h * S.tpl.t.altura);
+  }
+
+  // "Padrão profissional": retrato com a identidade Digi (camiseta preta com logo)
   async function tratarFotoTemplate(id) {
     const f = S.tpl.estado.fotos[id];
     const c = campoTpl(id);
     if (!f || !c || S.tpl.ocupado[id]) return;
     S.tpl.ocupado[id] = true;
-    atualizarBlocoFoto(id, "A IA está preparando a foto…");
+    atualizarBlocoFoto(id, "A IA está preparando a foto no padrão profissional…");
     try {
       const foto = await reduzirParaBase64(f.url, 1280);
-      const proporcao = window.CriaDigi.proporcaoIA(c.w * S.tpl.t.largura, c.h * S.tpl.t.altura);
-      const r = await API.gerar({ modo: "foto", foto, tratamento: c.ia, cor: c.ia_cor || null, instrucao: c.ia_instrucao || "", proporcao });
-      const img = await carregarImagem(r.imagens[0].url);
-      const atual = S.tpl && S.tpl.estado.fotos[id];
-      if (atual === f) { f.tratada = img; f.img = img; f.zoom = 1; f.dx = 0; f.dy = 0; }
+      const r = await API.gerar({
+        modo: "foto", foto, tratamento: "profissional",
+        cor: c.ia_cor || null, instrucao: c.ia_instrucao || "", proporcao: proporcaoDoCampo(c),
+      });
       S.tpl.ocupado[id] = false;
-      atualizarBlocoFoto(id);
-      desenharTpl();
+      if (S.tpl.estado.fotos[id] === f) await aplicarNaFoto(id, r.imagens[0].url);
     } catch (e) {
       if (S.tpl) S.tpl.ocupado[id] = false;
-      atualizarBlocoFoto(id, null, `A IA não conseguiu preparar a foto: ${e.message} A foto original foi usada.`);
+      atualizarBlocoFoto(id, null, `A IA não conseguiu preparar a foto: ${e.message}`);
     }
+  }
+
+  // "Ajustar com prompt": a foto vira a imagem em ajuste no chat ao lado
+  function levarFotoAoChat(id) {
+    const f = S.tpl.estado.fotos[id];
+    const c = campoTpl(id);
+    if (!f || !c) return;
+    const prop = proporcaoDoCampo(c);
+    const [a, b] = prop.split(":").map(Number);
+    const formato = { id: "tpl-foto", nome: "Foto do template", w: a * 100, h: b * 100, prop };
+    const src = f.img === f.tratada && f.tratada ? f.tratada.src : f.url;
+    const item = { id: "tplfoto-" + Date.now(), url: src, formato, prompt: c.rotulo || "Foto", tplCampo: id };
+    S.resultados.push(item);
+    definirFoco(item, { campo: id });
+    fecharOpcoesIA(id);
+    addMsg(`<p>A <b>${esc(c.rotulo || "foto")}</b> está pronta para ajustar. Diga o que você quer mudar, por exemplo: “troque a roupa por uma camiseta preta”, “fundo cinza claro”, “sorrindo”. O resultado já entra na arte.</p>${miniaturasChat([item])}`, "msg-ia");
+    const txt = $("#prompt");
+    if (window.innerWidth <= 900) txt.scrollIntoView({ behavior: "smooth", block: "center" });
+    txt.focus();
   }
 
   function atualizarBlocoFoto(id, carregando = null, erro = null) {
@@ -1145,13 +1681,17 @@
     $(".tpl-foto-ctrl", bloco).hidden = !f || !!carregando;
     st.hidden = !f;
     if (!f) return;
+    const usandoIA = !!f.tratada && f.img === f.tratada;
     st.className = "tpl-foto-estado" + (erro ? " erro" : "");
-    st.innerHTML = `<img src="${esc(f.tratada && f.img === f.tratada ? f.tratada.src : f.url)}" alt="">
-      <span>${carregando ? `<span class="ponto-carregando"></span>${esc(carregando)}` : erro ? esc(erro) : f.tratada ? "Foto preparada pela IA. Arraste na arte para ajustar." : "Arraste na arte para ajustar o enquadramento."}</span>`;
+    st.innerHTML = `<img src="${esc(usandoIA ? f.tratada.src : f.url)}" alt="">
+      <span>${carregando ? `<span class="ponto-carregando"></span>${esc(carregando)}`
+        : erro ? esc(erro)
+        : usandoIA ? "Foto preparada pela IA. Arraste na arte para enquadrar."
+        : "Foto original. Arraste na arte para enquadrar."}</span>`;
     const z = $(`[data-tpl-zoom="${id}"]`, bloco);
     if (z) { z.value = Math.round((f.zoom || 1) * 100); z.previousElementSibling.value = z.value + "%"; }
     const alt = $(`[data-tpl-alternar="${id}"]`, bloco);
-    if (alt) { alt.hidden = !f.tratada; alt.textContent = f.img === f.tratada ? "Ver foto original" : "Usar foto da IA"; }
+    if (alt) { alt.hidden = !f.tratada; alt.textContent = usandoIA ? "Ver foto original" : "Usar foto da IA"; }
   }
 
   // arrastar a foto dentro da moldura

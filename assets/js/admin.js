@@ -95,6 +95,8 @@
               <textarea name="sempre" rows="5" placeholder="Ex.: usar o rosa como destaque; luz natural; diversidade.">${esc(m.sempre)}</textarea></label>
             <label class="campo"><span class="rotulo">Nunca fazer</span>
               <textarea name="nunca" rows="5" placeholder="Ex.: cores neon; banco de imagens genérico; textos na imagem.">${esc(m.nunca)}</textarea></label>
+            <label class="campo inteiro"><span class="rotulo">Tom de voz (para os textos que a IA escreve)</span>
+              <textarea name="tom_de_voz" rows="3" placeholder="Ex.: claro, próximo, confiante, sem jargões nem arrogância.">${esc(m.tom_de_voz || "")}</textarea></label>
           </div>
           <div class="acoes-form"><button class="btn btn-primario" type="submit">Salvar identidade</button></div>
         </form>
@@ -558,7 +560,7 @@
           <tbody>${lista.map((u) => `<tr data-id="${u.id}">
             <td>${esc(u.email)}${u.email === S.sessao.email ? ' <span class="etiqueta">você</span>' : ""}</td>
             <td>${u.admin ? '<span class="etiqueta rosa">Admin</span>' : '<span class="etiqueta">Criação</span>'}</td>
-            <td class="some-mobile">${u.artes ?? 0}</td>
+            <td class="some-mobile">${u.artes ? `<button type="button" class="link-sutil" data-u="artes">${u.artes}</button>` : 0}</td>
             <td class="some-mobile">${u.ultimo_acesso ? new Date(u.ultimo_acesso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" }) : "—"}</td>
             <td class="acoes-td">${u.email === S.sessao.email ? "" : `
               <button type="button" class="btn btn-sm btn-ghost" data-u="admin">${u.admin ? "Tirar admin" : "Tornar admin"}</button>
@@ -589,6 +591,7 @@
         const b = ev.target.closest("[data-u]");
         if (!b) return;
         const u = (S.usuarios || []).find((x) => x.id === b.closest("tr").dataset.id);
+        if (b.dataset.u === "artes") { S.buscaPreset = u.email; irPara("criacoes"); return; }
         if (b.dataset.u === "admin") {
           if (await salvarComAviso(() => API.usuarios("admin", { email: u.email, valor: !u.admin }), "Perfil atualizado.")) carregar();
         }
@@ -602,6 +605,123 @@
           if (await salvarComAviso(() => API.usuarios("remover", { id: u.id }), "Conta removida.")) carregar();
         }
       });
+    },
+
+    // ---------------------------------------------------------------- criações de todo mundo
+    async criacoes(el) {
+      el.innerHTML = topo("Criações",
+        "Todas as artes salvas pelas contas. Para ajudar alguém, clique em Editar: a arte abre no editor da CriaDigi e, ao salvar, a versão editada vai para Minhas criações da própria pessoa (a original continua lá).")
+        + `<form class="busca-admin" id="f-busca-criacao"><input type="search" name="q" placeholder="Buscar por e-mail ou pedido" aria-label="Buscar criações" value="${esc(S.buscaPreset || "")}"><button class="btn btn-ghost" type="submit">Buscar</button></form>
+        <div id="lista-criacoes"><p class="ajuda">Carregando…</p></div>`;
+      S.buscaPreset = "";
+      const carregar = async () => {
+        const q = $("#f-busca-criacao").q.value;
+        $("#lista-criacoes").innerHTML = `<p class="ajuda">Carregando…</p>`;
+        try {
+          const lista = await API.criacoes({ busca: q });
+          S.criacoes = lista;
+          $("#lista-criacoes").innerHTML = lista.length ? `<p class="ajuda" style="margin-bottom:10px">${lista.length >= 200 ? "Mostrando as 200 mais recentes. Use a busca para achar outras." : `${lista.length} arte${lista.length > 1 ? "s" : ""}.`}</p>
+            <div class="admin-criacoes">${lista.map((g) => `
+              <div class="admin-criacao" data-gid="${esc(g.id)}">
+                <a href="${esc(g.url)}" target="_blank" rel="noopener"><img src="${esc(g.url)}" alt="" loading="lazy"></a>
+                <div class="info">
+                  <b title="${esc(g.email || "")}">${esc(g.email || "Sem e-mail")}</b>
+                  <span title="${esc(g.prompt || "")}">${esc(g.prompt || "Sem descrição")}</span>
+                  <span>${new Date(g.criado_em).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}${g.editado_por ? ` · editada por ${esc(g.editado_por.split("@")[0])}` : ""}</span>
+                  <div class="acoes">
+                    <a class="btn btn-sm btn-primario" href="./?criacao=${encodeURIComponent(g.id)}" target="_blank" rel="noopener">Editar</a>
+                    <button type="button" class="btn btn-sm btn-perigo" data-apagar>Apagar</button>
+                  </div>
+                </div>
+              </div>`).join("")}</div>` : `<p class="ajuda">Nenhuma arte encontrada.</p>`;
+        } catch (e) {
+          $("#lista-criacoes").innerHTML = `<div class="erro-lote">${esc(e.message)}</div>`;
+        }
+      };
+      $("#f-busca-criacao").addEventListener("submit", (ev) => { ev.preventDefault(); carregar(); });
+      $("#lista-criacoes").addEventListener("click", async (ev) => {
+        const b = ev.target.closest("[data-apagar]");
+        if (!b) return;
+        const card = b.closest("[data-gid]");
+        const g = (S.criacoes || []).find((x) => String(x.id) === card.dataset.gid);
+        if (!g || !confirm(`Apagar esta arte de ${g.email || "uma conta"}? Não dá para desfazer.`)) return;
+        if (await salvarComAviso(() => API.apagarGeracao(g), "Arte apagada.")) card.remove();
+      });
+      carregar();
+    },
+
+    // ---------------------------------------------------------------- conversas de todo mundo
+    async conversas(el) {
+      el.innerHTML = topo("Conversas",
+        "Todas as conversas com a IA das contas que salvam artes. Abra uma para ler o que a pessoa pediu e editar as imagens dela.")
+        + `<form class="busca-admin" id="f-busca-conversa"><input type="search" name="q" placeholder="Buscar por e-mail ou título" aria-label="Buscar conversas" value="${esc(S.buscaPreset || "")}"><button class="btn btn-ghost" type="submit">Buscar</button></form>
+        <section class="cartao-admin" id="conversa-aberta" hidden></section>
+        <div id="lista-conversas"><p class="ajuda">Carregando…</p></div>`;
+      S.buscaPreset = "";
+      const carregar = async () => {
+        const q = $("#f-busca-conversa").q.value;
+        $("#lista-conversas").innerHTML = `<p class="ajuda">Carregando…</p>`;
+        try {
+          const lista = await API.conversas({ todas: true, busca: q, limite: 200 });
+          $("#lista-conversas").innerHTML = lista.length ? `<div class="conversas-lista">${lista.map((c) => `
+            <div class="conversa-item" data-cid="${esc(c.id)}" role="button" tabindex="0">
+              <span class="conversa-icone" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 5h16v11H10l-4 3v-3H4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></span>
+              <span class="conversa-texto">
+                <span class="conversa-titulo">${esc(c.titulo || "Conversa")}</span>
+                <span class="conversa-email">${esc(c.email || "")} · ${new Date(c.atualizado_em || c.criado_em).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}</span>
+              </span>
+              <button type="button" class="icone" data-apagar title="Apagar conversa" aria-label="Apagar conversa">
+                <svg viewBox="0 0 24 24" width="16" height="16"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+              </button>
+            </div>`).join("")}</div>` : `<p class="ajuda">Nenhuma conversa encontrada.</p>`;
+        } catch (e) {
+          $("#lista-conversas").innerHTML = `<div class="erro-lote">${esc(e.message)}</div>`;
+        }
+      };
+      const editavel = (it) => it.url && !/^(txt|tpl|local)-/.test(String(it.id));
+      const abrir = async (id) => {
+        const box = $("#conversa-aberta");
+        box.hidden = false;
+        box.innerHTML = `<p class="ajuda">Carregando…</p>`;
+        try {
+          const c = await API.conversa(id);
+          const hora = (iso) => (iso ? `<div class="t-hora">${new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}</div>` : "");
+          const msgs = (c.mensagens || []).map((m) => {
+            if (m.papel === "eu") {
+              const extra = [m.foco ? "ajustando uma imagem" : "", ...(m.extras || [])].filter(Boolean);
+              return `<div class="t-msg t-eu">${esc(m.texto || "")}${extra.length ? `<div class="t-hora">+ ${esc(extra.join(" e "))}</div>` : ""}${hora(m.quando)}</div>`;
+            }
+            const imgs = (m.itens || []).filter((x) => x.url).map((x) => editavel(x)
+              ? `<a href="./?criacao=${encodeURIComponent(x.id)}" target="_blank" rel="noopener" title="Abrir no editor"><img src="${esc(x.url)}" alt="" loading="lazy"></a>`
+              : `<span title="Ajuste só de texto (abra a imagem original para editar)"><img src="${esc(x.url)}" alt="" loading="lazy"></span>`).join("");
+            return `<div class="t-msg t-ia ${m.erro ? "t-erro" : ""}">${esc(m.texto || "")}${imgs ? `<div class="t-imgs">${imgs}</div>` : ""}${hora(m.quando)}</div>`;
+          }).join("");
+          box.innerHTML = `<div class="secao-topo" style="margin-bottom:12px"><div><h2>${esc(c.titulo || "Conversa")}</h2><p class="ajuda">${esc(c.email || "")} · começou em ${new Date(c.criado_em).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}. Clique numa imagem para abrir no editor.</p></div>
+            <button type="button" class="btn btn-sm btn-ghost" data-fechar>Fechar</button></div>
+            <div class="transcricao">${msgs || `<p class="ajuda">Conversa vazia.</p>`}</div>`;
+          box.scrollIntoView({ block: "start", behavior: "smooth" });
+        } catch (e) {
+          box.innerHTML = `<div class="erro-lote">${esc(e.message)}</div>`;
+        }
+      };
+      $("#f-busca-conversa").addEventListener("submit", (ev) => { ev.preventDefault(); carregar(); });
+      $("#conversa-aberta").addEventListener("click", (ev) => {
+        if (ev.target.closest("[data-fechar]")) { $("#conversa-aberta").hidden = true; }
+      });
+      $("#lista-conversas").addEventListener("click", async (ev) => {
+        const item = ev.target.closest("[data-cid]");
+        if (!item) return;
+        if (ev.target.closest("[data-apagar]")) {
+          if (!confirm("Apagar esta conversa? As artes salvas continuam nas criações da pessoa.")) return;
+          if (await salvarComAviso(() => API.apagarConversa(item.dataset.cid), "Conversa apagada.")) { item.remove(); $("#conversa-aberta").hidden = true; }
+          return;
+        }
+        abrir(item.dataset.cid);
+      });
+      $("#lista-conversas").addEventListener("keydown", (ev) => {
+        if ((ev.key === "Enter" || ev.key === " ") && ev.target.matches("[data-cid]")) { ev.preventDefault(); ev.target.click(); }
+      });
+      carregar();
     },
 
     // ---------------------------------------------------------------- IA
@@ -620,9 +740,12 @@
               <label class="campo"><span class="rotulo">Resolução</span>
                 <select name="resolucao">${["1K", "2K", "4K"].map((r) => `<option ${m.resolucao === r ? "selected" : ""}>${r}</option>`).join("")}</select></label>
               <label class="campo"><span class="rotulo">Referências enviadas por pedido</span>${num("max_referencias", m.max_referencias ?? 4, 0, 6)}</label>
-              <label class="campo checar inteiro"><input type="checkbox" name="permitir_texto_ia" ${m.permitir_texto_ia ? "checked" : ""}> Permitir que a IA escreva textos na imagem</label>
+              <label class="campo checar inteiro"><input type="checkbox" name="textos_ia" ${m.textos_ia !== false ? "checked" : ""}> A IA escreve e aplica textos editáveis (título, subtítulo e chamada) quando o usuário pede</label>
+              <label class="campo inteiro"><span class="rotulo">Modelo de texto (planeja e escreve os textos)</span>
+                <input type="text" name="modelo_texto" value="${esc(m.modelo_texto || "gemini-2.5-flash")}"></label>
+              <label class="campo checar inteiro"><input type="checkbox" name="permitir_texto_ia" ${m.permitir_texto_ia ? "checked" : ""}> Permitir que a IA desenhe textos dentro da imagem (não recomendado: o texto não fica editável)</label>
             </div>
-            <p class="ajuda" style="margin-top:12px">Recomendado: deixar a IA <b>sem</b> escrever textos. Eles entram no editor com as fontes oficiais. 2K é o melhor equilíbrio entre qualidade e custo.</p>
+            <p class="ajuda" style="margin-top:12px">Com os textos editáveis ligados, a IA gera a imagem sem letras e a plataforma aplica título, subtítulo e chamada com as fontes oficiais. Pedidos que mexem só no texto não geram imagem nova (não gastam crédito). 2K é o melhor equilíbrio entre qualidade e custo.</p>
           </section>
 
           <section class="cartao-admin">
@@ -672,6 +795,8 @@
           modelo: f.modelo.value, resolucao: f.resolucao.value,
           max_referencias: Math.min(6, n("max_referencias", 0, 4)),
           permitir_texto_ia: f.permitir_texto_ia.checked,
+          textos_ia: f.textos_ia.checked,
+          modelo_texto: f.modelo_texto.value.trim() || "gemini-2.5-flash",
           anon_hora: n("anon_hora", 0, 10), anon_dia: n("anon_dia", 0, 20), anon_ip_dia: n("anon_ip_dia", 0, 100),
           conta_hora: n("conta_hora", 1, 30), conta_dia: n("conta_dia", 1, 100),
           limite_dia: n("limite_dia", 1, 1000),
@@ -826,16 +951,14 @@
           <label class="campo"><span class="rotulo">Nome do campo (o usuário vê)</span><input type="text" data-p="rotulo" value="${esc(c.rotulo)}"></label>
           <span class="rotulo">Forma</span>
           <div class="segmentado segmentado-sm">${[["retangulo", "Retângulo"], ["arredondado", "Arredondado"], ["circulo", "Círculo"]].map(([v, n]) => `<button type="button" data-forma="${v}" class="${c.forma === v ? "on" : ""}">${n}</button>`).join("")}</div>
-          <label class="campo" style="margin-top:14px"><span class="rotulo">O que a IA faz com a foto</span>
+          <label class="campo" style="margin-top:14px"><span class="rotulo">Preparar a foto com IA</span>
             <select data-p="ia">
-              <option value="nenhum" ${c.ia === "nenhum" ? "selected" : ""}>Nada: usa a foto como veio</option>
-              <option value="retrato" ${c.ia === "retrato" ? "selected" : ""}>Retrato profissional com fundo liso</option>
-              <option value="fundo" ${c.ia === "fundo" ? "selected" : ""}>Só troca o fundo da foto</option>
-              <option value="personalizado" ${c.ia === "personalizado" ? "selected" : ""}>Instrução personalizada</option>
+              <option value="profissional" ${c.ia !== "nenhum" ? "selected" : ""}>Oferecer o botão (padrão profissional ou prompt)</option>
+              <option value="nenhum" ${c.ia === "nenhum" ? "selected" : ""}>Não oferecer: só a foto original</option>
             </select></label>
-          ${c.ia === "retrato" || c.ia === "fundo" ? `<span class="rotulo">Cor do fundo</span>${swatchesAdmin(c.ia_cor, "data-iacor")}` : ""}
-          ${c.ia === "personalizado" ? `<label class="campo" style="margin-top:12px"><span class="rotulo">Instrução para a IA</span><textarea data-p="ia_instrucao" rows="3" placeholder="Ex.: retrato de busto sorrindo, fundo rosa #EA0356, luz suave">${esc(c.ia_instrucao || "")}</textarea></label>` : ""}
-          <p class="ajuda ajuda-mini">A IA sempre preserva o rosto da pessoa. O usuário pode voltar para a foto original se preferir.</p>
+          ${c.ia !== "nenhum" ? `<span class="rotulo">Cor do fundo no padrão profissional</span>${swatchesAdmin(c.ia_cor, "data-iacor")}
+          <label class="campo" style="margin-top:12px"><span class="rotulo">Instrução extra para o padrão profissional (opcional)</span><textarea data-p="ia_instrucao" rows="3" placeholder="Ex.: enquadrar do peito para cima, sorriso aberto">${esc(c.ia_instrucao || "")}</textarea></label>
+          <p class="ajuda ajuda-mini">A foto sempre entra como foi enviada. Se a pessoa quiser, clica em "Preparar a imagem com IA" e escolhe o padrão profissional (camiseta preta com o logo Digi, luz branca e esse fundo) ou ajusta com um prompt no chat.</p>` : ""}
           <span class="rotulo">Posição e tamanho (% da arte)</span>
           <div class="tres-col"><label>X ${num("x", pct(c.x), -20, 100)}</label><label>Y ${num("y", pct(c.y), -20, 100)}</label><label>Largura ${num("w", pct(c.w), 2, 100)}</label><label>Altura ${num("h", pct(c.h), 2, 100)}</label></div>
           <button type="button" class="btn btn-sm btn-perigo" id="tpl-remover-campo" style="margin-top:14px">Remover campo</button>
@@ -925,7 +1048,7 @@
     $("#tpl-add-foto").addEventListener("click", () => {
       const c = {
         id: window.CriaDigi.uid(), tipo: "foto", rotulo: "Foto da pessoa", x: 0.3, y: 0.15, w: 0.4, h: 0.4,
-        forma: "circulo", ia: "retrato", ia_cor: corDoPapel("fundo", "#F7F7F8"), ia_instrucao: "",
+        forma: "circulo", ia: "profissional", ia_cor: corDoPapel("fundo", "#E5E5E5"), ia_instrucao: "",
       };
       ajustarCirculo(c);
       t.campos = [...(t.campos || []), c]; ED.sel = c.id;

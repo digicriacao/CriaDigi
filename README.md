@@ -41,7 +41,7 @@ Tudo do CriaDigi tem o prefixo `criadigi`, então nada encosta na Sof.ia:
 
 | | Sof.ia (já existe, não mexer) | CriaDigi (novo) |
 |---|---|---|
-| Tabelas | `revisoes`, `vocabulario`, `regras`, `feedbacks`, `keepalive` | `criadigi_marca`, `criadigi_cores`, `criadigi_arquivos`, `criadigi_estilos`, `criadigi_geracoes`, `criadigi_uso`, `criadigi_admins` |
+| Tabelas | `revisoes`, `vocabulario`, `regras`, `feedbacks`, `keepalive` | `criadigi_marca`, `criadigi_cores`, `criadigi_arquivos`, `criadigi_estilos`, `criadigi_formatos`, `criadigi_templates`, `criadigi_geracoes`, `criadigi_uso`, `criadigi_admins` |
 | Storage | `artes` | `criadigi-marca`, `criadigi-geracoes` |
 | Funções | `quick-api` | `criadigi-gerar`, `criadigi-usuarios` |
 | Secrets | `GEMINI_API_KEY` e outras | usa a mesma `GEMINI_API_KEY` |
@@ -58,7 +58,8 @@ O login (Authentication) passa a ser usado pelo CriaDigi. A Sof.ia não usa o lo
 
 1. No projeto da Sof.ia no Supabase, abra **SQL Editor** → **New query**.
 2. Cole todo o conteúdo de `supabase/setup.sql` e clique em **Run**.
-   Isso cria as tabelas, a segurança e as pastas de arquivos do CriaDigi, cadastra as cores Digi e 4 estilos, e define **tiago.perrart@digi.ag** como admin.
+   Isso cria as tabelas, a segurança e as pastas de arquivos do CriaDigi, cadastra as cores Digi, 4 estilos e 7 formatos, cria a tabela de templates e define **tiago.perrart@digi.ag** como admin.
+   Se você já tinha rodado uma versão anterior, rode de novo: ele só acrescenta o que falta.
 
 ### 2. Login (Authentication)
 
@@ -129,6 +130,8 @@ O GitHub desliga tarefas agendadas de repositórios sem commits há 60 dias. O k
    - **Tipografia:** os arquivos das fontes, um por peso, indicando qual é de título e qual é de texto.
    - **Referências:** de 4 a 10 peças aprovadas, sem texto, que representem o estilo.
    - **Identidade:** revise a descrição e as regras. A prévia mostra o que a IA recebe.
+   - **Templates:** cadastre as artes prontas (aniversários, comunicados).
+   - **Formatos:** ajuste os tamanhos da lateral. O primeiro da lista já vem marcado para o usuário.
    - **IA e limites:** confira os limites e o domínio `digi.ag`.
 
 ---
@@ -148,10 +151,23 @@ python3 -m http.server 8000
 ## O que tem na plataforma
 
 **Criar (index.html)**
-- Prompt com ideias prontas, estilos do admin, 7 formatos (Feed quadrado e retrato, Story/Reels, Banner, LinkedIn, Topo de e-mail, Cartaz A4) e 1, 2 ou 4 variações.
-- Opção de partir de uma foto ou rascunho, recriada no padrão da marca.
+- **Textos editáveis feitos pela IA:** peça a arte com texto (ex.: *imagem de Natal com a mensagem "Feliz Natal, Diginerd!" e um subtítulo*). A IA gera a imagem **sem letras**, com espaço livre, e a plataforma aplica título, subtítulo e chamada como camadas editáveis, com as fontes e cores da marca. Texto entre aspas é usado exatamente; quando você pede "adicione um subtítulo", a IA escreve no tom de voz da marca. Pedidos que mudam só o texto ("mude o título para…") não geram imagem nova. A cor do título e a versão do logo se ajustam ao fundo.
+- **Esquerda, chat com a IA:** descreva a imagem e continue a conversa pedindo ajustes ("fundo mais claro", "coloque confetes"). Cada pedido ajusta a imagem selecionada; clique em outra miniatura para ajustar outra, ou no × para criar uma nova. "Nova conversa" recomeça.
+- **Direita, opções:** estilo, formato, variações (1, 2 ou 4), partir de uma imagem e **fotos de pessoas** (até 4): a IA coloca a pessoa na arte mantendo o rosto.
+- **Centro:** resultados, **Templates**, Minhas criações e **Minhas conversas**.
 - Botão **Entrar**: entrar, criar conta e "esqueci minha senha". Com login, "Minhas criações" guarda tudo o que a pessoa gera.
+- **Minhas conversas** (com login): cada conversa com a IA fica guardada, como no ChatGPT. Ao abrir uma, o chat, as imagens e a última imagem selecionada voltam, e dá para continuar pedindo ajustes de onde parou.
+- **Salvar em Minhas criações** (no editor, com login): guarda a versão editada (com textos, logo e recorte) como uma nova criação; a original continua lá.
+- Favicon: bolinha pink pulsando; enquanto a IA gera, ganha um anel girando.
 - Botões para Sof.ia, Otimizador, Digi Réguas e Pauta, e tema claro/escuro.
+
+**Templates**
+- Artes prontas do admin (aniversário, comunicado…). O usuário só troca os textos liberados e coloca a foto.
+- A foto entra exatamente como foi enviada. Se a pessoa quiser, clica em **Preparar a imagem com IA** e escolhe:
+  - **Padrão profissional:** retrato de busto com camiseta preta com o logo Digi, luz branca e o fundo definido pelo admin, preservando o rosto;
+  - **Ajustar com prompt:** a foto vai para o chat ao lado; cada pedido ("sorrindo", "fundo cinza") volta direto para a arte.
+- Dá para voltar à foto original, dar zoom e arrastar para enquadrar.
+- Baixa em PNG ou JPG, copia, ou abre no editor para recortar e redimensionar.
 
 **Editor**
 - Recortar (proporção livre ou travada), resize em pixels, girar e espelhar.
@@ -161,7 +177,11 @@ python3 -m http.server 8000
 
 **Admin (admin.html, link no rodapé)**
 - Identidade, paleta, tipografia, logos, referências e estilos.
-- **Contas:** lista quem tem conta, quantas artes salvou, define admins, troca senhas e remove contas.
+- **Templates:** envie a arte de fundo e, no editor visual, adicione os **textos editáveis** (fonte, cor, tamanho, alinhamento, limite de linhas; a letra diminui sozinha se o texto for longo) e a **área da foto** (retângulo, arredondado ou círculo; se oferece o botão de IA; cor de fundo e instrução extra do padrão profissional). Arraste para posicionar, puxe o quadradinho rosa para redimensionar e teste com uma foto de exemplo. Opcional: uma camada PNG por cima da foto, como uma moldura (a foto aparece só onde a moldura é transparente). O botão **Importar** recebe um pacote pronto (template.json + imagens).
+- **Formatos:** criar, renomear, mudar largura e altura, reordenar, desativar e apagar os tamanhos que aparecem na lateral, com sugestões prontas (YouTube, Pinterest, banner de site…). A proporção enviada à IA é calculada sozinha; o editor recorta no tamanho exato.
+- **Contas:** lista quem tem conta, quantas artes salvou (clique no número para ver as artes), define admins, troca senhas e remove contas.
+- **Criações:** todas as artes salvas por todas as contas, com busca por e-mail. **Editar** abre a arte no editor; ao salvar, a versão editada vai para Minhas criações da própria pessoa (marcada como "Editada pelo admin"). Serve para quando alguém pede ajuda. Também dá para abrir pelo link `…/criadigi/?criacao=<id>`.
+- **Conversas:** todas as conversas de todas as contas, com busca. Abra uma para ler o que a pessoa pediu; clique numa imagem para editá-la.
 - **IA e limites:** modelo, resolução e todos os limites de uso.
 
 ---
@@ -174,6 +194,8 @@ python3 -m http.server 8000
 | Erro 401 ao gerar sem login | Desligue "Enforce JWT verification" em `criadigi-gerar`. |
 | Deploy da função falha com "Unexpected eof" | Cole o arquivo inteiro de novo, sem editar; ele precisa continuar sem acentos. |
 | "Manual de marca não encontrado" | Rode o `setup.sql`. |
+| A aba Templates fica vazia | Rode o `setup.sql` de novo (ele cria a tabela de templates) e cadastre um template no admin. |
+| "Minhas conversas" fica vazia ou "Salvar em Minhas criações" dá erro de permissão | Rode o `setup.sql` de novo (ele cria a tabela de conversas e as permissões de salvar). Só contas com e-mail de domínio permitido (IA e limites) salvam. |
 | "A chave do Gemini é inválida" / "faturamento" | Confira a `GEMINI_API_KEY` e o Billing no Google AI Studio. |
 | "Confirme seu e-mail" e o e-mail não chega | Desligue "Confirm email" (passo 2) ou configure um SMTP. Para liberar alguém na hora: Authentication → Users → a pessoa → **Confirm user**. |
 | Link de "esqueci minha senha" abre página errada | Confira Site URL e Redirect URLs (passo 2.2). |
@@ -191,6 +213,7 @@ criadigi/
 │   └── keepalive.yml                  mantém o Supabase ativo (a cada 3 dias)
 ├── index.html                         criação + editor (login opcional)
 ├── admin.html                         manual de marca (só admins)
+├── favicon.svg                        bolinha pink (o site anima pelo JavaScript)
 ├── logo-rosa.png                      (copiar do repositório do Pauta)
 ├── assets/
 │   ├── css/styles.css                 identidade Digi, tema claro e escuro
@@ -198,6 +221,7 @@ criadigi/
 │       ├── config.js                  URL e chave pública do Supabase
 │       ├── core.js                    dados, login, cabeçalho, rodapé, demonstração
 │       ├── editor.js                  editor de imagem (canvas)
+│       ├── modelo.js                  desenho dos templates (admin e criação)
 │       ├── app.js                     tela de criação
 │       └── admin.js                   painel admin
 └── supabase/
