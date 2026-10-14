@@ -150,33 +150,35 @@
   }
 
   // ================================================================ MODO DEMO
-  const DEMO_KEY = "criadigi-demo-v2";
+  const DEMO_KEY = "criadigi-demo-v3";
   function demoPadrao() {
     return {
       marca: {
         id: 1, nome: "Digi",
-        descricao: "Visual contemporâneo, limpo e enérgico. Fotografia luminosa com pessoas reais em ambientes de trabalho modernos, ou ilustrações flat com formas geométricas simples. Muito respiro, contraste alto e o rosa Digi como cor de destaque.",
-        sempre: "Usar o rosa Digi como cor de destaque. Manter fundos limpos e bem iluminados. Diversidade de pessoas.",
-        nunca: "Cores neon fora da paleta, visual de banco de imagens genérico, excesso de elementos, filtros vintage, texto escrito na imagem.",
+        descricao: "Digi combina energia e proximidade com autoridade, inovação e um repertório visual contemporâneo. Fotografia real e moderna: pessoas modernas, inspiradoras, confiantes e motivadas, com expressões espontâneas, em ambientes reais com clima moderno e linguagem tecnológica (cotidiano, mobilidade, tecnologia e futuro). Iluminação natural branca, sem tom amarelado. O pink Digi (#EA0356 e #FF0066) define a presença da marca como luz, acessório ou elemento de cena, com pontos de luz cor-de-rosa e um toque de neon que realçam o significado da imagem sem substituir o realismo. A cor predominante depende do contexto: pink para celebração, novidades e lançamentos; preto para comunicação institucional, clientes e cases; cinza para cultura, pessoas, metodologia e processos. Composição forte e limpa, com respiro para um título curto.",
+        sempre: "Pink presente de forma intencional na cena (luz, acessório ou objeto). Luz natural branca. Pessoas reais e diversas, confiantes, com expressões espontâneas e enquadramentos variados. Ambientes reais e modernos com toque de tecnologia. Contraste forte entre pink, preto e cinza. Poucos elementos, com uma área limpa para o título.",
+        nunca: "Clichê corporativo de banco de imagens. Excesso de efeito neon ou luz pink artificial que tire o realismo. Tom amarelado na luz. Imagem inteira tingida de pink: preservar o equilíbrio entre áreas densas e respiros. Imagens escuras demais que atrapalhem a leitura do título. Muitos elementos competindo por atenção. Logotipos de outras marcas. Texto escrito na imagem.",
         logo_padrao: null, logo_posicao: "inf-dir", logo_tamanho: 16,
         modelo: "gemini-nano-banana-2.1", resolucao: "2K", max_referencias: 4,
         permitir_texto_ia: false,
         anon_hora: 10, anon_dia: 20, anon_ip_dia: 100, conta_hora: 30, conta_dia: 100, limite_dia: 1000, dominios_conta: "",
       },
       cores: [
-        { id: uid(), nome: "Rosa Digi", hex: "#EA0356", papel: "principal", ordem: 1 },
-        { id: uid(), nome: "Rosa vivo", hex: "#FF0066", papel: "secundaria", ordem: 2 },
-        { id: uid(), nome: "Rosa profundo", hex: "#D10752", papel: "apoio", ordem: 3 },
-        { id: uid(), nome: "Grafite", hex: "#222323", papel: "texto", ordem: 4 },
-        { id: uid(), nome: "Névoa", hex: "#F7F7F8", papel: "fundo", ordem: 5 },
-        { id: uid(), nome: "Branco", hex: "#FFFFFF", papel: "fundo", ordem: 6 },
+        { id: uid(), nome: "Pink Digi", hex: "#EA0356", papel: "principal", ordem: 1 },
+        { id: uid(), nome: "Pink vivo", hex: "#FF0066", papel: "secundaria", ordem: 2 },
+        { id: uid(), nome: "Preto Digi", hex: "#2D2D2D", papel: "apoio", ordem: 3 },
+        { id: uid(), nome: "Preto profundo", hex: "#232323", papel: "texto", ordem: 4 },
+        { id: uid(), nome: "Cinza Digi", hex: "#DBDCDD", papel: "fundo", ordem: 5 },
+        { id: uid(), nome: "Cinza claro", hex: "#E5E5E5", papel: "fundo", ordem: 6 },
+        { id: uid(), nome: "Branco", hex: "#FFFFFF", papel: "apoio", ordem: 7 },
       ],
       arquivos: [],
       estilos: [
-        { id: uid(), nome: "Fotografia", instrucao: "Fotografia editorial realista, luz natural suave, profundidade de campo rasa, cores fiéis à paleta da marca.", ordem: 1, ativo: true },
-        { id: uid(), nome: "Ilustração flat", instrucao: "Ilustração vetorial flat, formas geométricas simples, sem texturas, contornos limpos, usando apenas as cores da paleta.", ordem: 2, ativo: true },
-        { id: uid(), nome: "3D suave", instrucao: "Render 3D minimalista com materiais foscos e cantos arredondados, iluminação de estúdio suave, fundo limpo nas cores da paleta.", ordem: 3, ativo: true },
-        { id: uid(), nome: "Abstrato", instrucao: "Composição abstrata com formas orgânicas e gradientes suaves entre as cores da paleta, ideal como fundo para texto.", ordem: 4, ativo: true },
+        { id: uid(), nome: "Fotografia Digi", instrucao: "Fotografia real, moderna e natural. Luz natural branca, sem amarelado. Pessoas confiantes com expressões espontâneas em ambiente real e moderno, com algum elemento de tecnologia (celular, notebook, tablet). O pink aparece como luz de cena, acessório ou objeto, com pontos de luz cor-de-rosa ao fundo. Profundidade de campo rasa e acabamento cinematográfico, sem exagero de neon.", ordem: 1, ativo: true },
+        { id: uid(), nome: "Celebração (pink)", instrucao: "Fotografia real para celebrações, novidades e lançamentos. O pink predomina na cena por meio da luz, de objetos, confetes ou balões, com clima de alegria e conquista. Pessoas comemorando com naturalidade. Mantenha uma área limpa para o título e não tinja a imagem inteira de pink.", ordem: 2, ativo: true },
+        { id: uid(), nome: "Institucional (preto)", instrucao: "Fotografia sóbria para comunicação institucional, clientes e cases. Tons escuros grafite (#2D2D2D, #232323) predominam, com o pink como acento de luz de alta visibilidade. Clima de presença, autoridade e confiança. A imagem não pode ficar escura demais: deixe uma área com contraste para o título.", ordem: 3, ativo: true },
+        { id: uid(), nome: "Cultura (cinza)", instrucao: "Fotografia leve para falar de cultura, pessoas, metodologia e processos. Tons de cinza claro (#DBDCDD, #E5E5E5) e branco predominam, com o pink como detalhe. Pessoas colaborando em um ambiente de trabalho moderno e transparente, clima de abertura e equilíbrio.", ordem: 4, ativo: true },
+        { id: uid(), nome: "Diginerd 3D", instrucao: "Personagem 3D em estilo de animação de cinema, simpático e expressivo, representando um colaborador Digi (Diginerd). Ele sempre tem cabelo pintado de pink, óculos de armação preta grossa e camiseta preta. Se houver foto de pessoa anexada, traduza fielmente a fisionomia dela: formato do rosto, cor da pele, cor e proporção dos olhos, nariz, boca, sobrancelhas, estilo e corte de cabelo (mas com o cabelo pink). Fundo liso em cinza claro ou pink, enquadramento de busto.", ordem: 5, ativo: true },
       ],
       geracoes: [],
       usuarios: [{ id: "demo-admin", email: "admin@demo.local", admin: true, criado_em: new Date().toISOString() }],

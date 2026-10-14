@@ -58,7 +58,7 @@
   function irPara(sec) {
     if (ED.t && ED.sujo && $("#tpl-admin-tela")) {
       if (!confirm("Sair sem salvar as alterações do template?")) return;
-      if (ED.novo) API.removerArteTemplate(ED.t.base_caminho);
+      if (ED.novo) { API.removerArteTemplate(ED.t.base_caminho); API.removerArteTemplate(ED.t.sobre_caminho); }
     }
     ED.t = null; ED.sujo = false;
     S.secao = sec;
@@ -193,7 +193,8 @@
           </div>`,
         metaInicial: (file) => ({
           nome: file.name.replace(/\.[^.]+$/, "").replace(/[-_](Regular|Bold|Medium|Light|Black|SemiBold|ExtraBold|Thin|Italic|VariableFont.*)$/i, "").replace(/[-_]+/g, " ").trim(),
-          variante: S.arquivos.some((a) => a.tipo === "fonte" && a.variante === "titulo") ? "texto" : "titulo",
+          // fontes com peso 600 ou mais viram "Títulos"; as mais leves, "Textos"
+          variante: /black|bold|semibold|heavy/i.test(file.name) ? "titulo" : "texto",
           peso: /black/i.test(file.name) ? 900 : /extrabold/i.test(file.name) ? 800 : /semibold/i.test(file.name) ? 600 : /bold/i.test(file.name) ? 700 : /medium/i.test(file.name) ? 500 : /light/i.test(file.name) ? 300 : 400,
         }),
         depois: () => carregarFontes(S.arquivos),
@@ -219,7 +220,7 @@
         acoesExtras: (a) => S.marca.logo_padrao === a.id ? "" : `<button type="button" class="btn btn-sm btn-ghost" data-padrao="${a.id}">Tornar padrão</button>`,
         metaInicial: (file) => ({
           nome: file.name.replace(/\.[^.]+$/, ""),
-          variante: /neg|branc|white/i.test(file.name) ? "negativa" : /icon|simbolo|símbolo/i.test(file.name) ? "icone" : "principal",
+          variante: /icon|simbolo|símbolo|pastilha/i.test(file.name) ? "icone" : /neg|branc|white|cinza|gray|grey/i.test(file.name) ? "negativa" : "principal",
         }),
         rodape: `<section class="cartao-admin">
           <h2>Aplicação automática</h2>
@@ -324,7 +325,10 @@
     async templates(el) {
       el.innerHTML = topo("Templates",
         "Artes prontas com base fixa, como aniversários e comunicados. Você define quais textos o usuário pode editar e onde entra a foto da pessoa; o resto da arte não muda.",
-        `<label class="btn btn-primario"><input type="file" accept="image/png,image/jpeg,image/webp" hidden id="novo-template"> + Novo template</label>`)
+        `<div class="linha-botoes" style="margin:0">
+          <label class="btn btn-ghost" title="Selecione juntos o template.json e as imagens do pacote"><input type="file" accept=".json,application/json,image/png,image/jpeg,image/webp" multiple hidden id="importar-template">Importar</label>
+          <label class="btn btn-primario"><input type="file" accept="image/png,image/jpeg,image/webp" hidden id="novo-template"> + Novo template</label>
+        </div>`)
         + `<section class="cartao-admin">
           <p class="ajuda">Para começar, envie a arte de fundo já no tamanho final (ex.: 1080×1350), sem os textos que vão mudar e com o espaço da foto livre.</p>
           <div class="tpl-grade" id="lista-templates"><p class="ajuda">Carregando…</p></div>
@@ -362,6 +366,36 @@
             largura: dim.w, altura: dim.h, campos: [], ativo: true, ordem: (S.templatesAdmin.at(-1)?.ordem || 0) + 1,
           }, true);
         } catch (e) { toast(e.message, "erro", 7000); }
+      });
+
+      // pacote pronto: template.json + arte de fundo (+ camada de cima), selecionados juntos
+      $("#importar-template").addEventListener("change", async (ev) => {
+        const arquivos = [...ev.target.files];
+        ev.target.value = "";
+        if (!arquivos.length) return;
+        try {
+          const json = arquivos.find((f) => /\.json$/i.test(f.name));
+          if (!json) throw new Error("Selecione também o arquivo template.json do pacote.");
+          let def;
+          try { def = JSON.parse(await json.text()); } catch (_) { throw new Error("O template.json está com formato inválido."); }
+          if (!def || !def.criadigi_template || !def.fundo) throw new Error("Este arquivo não é um template da CriaDigi.");
+          const achar = (nome) => arquivos.find((f) => f.name === nome);
+          const fundo = achar(def.fundo);
+          if (!fundo) throw new Error(`Selecione junto o arquivo "${def.fundo}".`);
+          const sobre = def.sobre ? achar(def.sobre) : null;
+          if (def.sobre && !sobre) throw new Error(`Selecione junto o arquivo "${def.sobre}".`);
+          const dim = await dimensoes(fundo);
+          toast("Enviando as imagens do template…", "info", 2500);
+          const b = await API.enviarArteTemplate(fundo);
+          const c = sobre ? await API.enviarArteTemplate(sobre) : { caminho: null, url: null };
+          const campos = (Array.isArray(def.campos) ? def.campos : []).map((x) => ({ ...x, id: window.CriaDigi.uid() }));
+          abrirEditorTemplate({
+            id: null, nome: def.nome || fundo.name.replace(/\.[^.]+$/, ""), categoria: def.categoria || "Geral",
+            base_caminho: b.caminho, base_url: b.url, sobre_caminho: c.caminho, sobre_url: c.url,
+            largura: dim.w, altura: dim.h, campos, ativo: true, ordem: (S.templatesAdmin.at(-1)?.ordem || 0) + 1,
+          }, true);
+          toast("Template importado. Confira e clique em Salvar template.", "ok", 6000);
+        } catch (e) { toast(e.message, "erro", 8000); }
       });
 
       $("#lista-templates").addEventListener("change", async (ev) => {
@@ -820,7 +854,8 @@
     const t = ED.t;
     $("#tpl-sair").addEventListener("click", () => {
       if (ED.sujo && !confirm("Sair sem salvar as alterações do template?")) return;
-      if (ED.novo && ED.sujo) API.removerArteTemplate(t.base_caminho);
+      if (ED.novo && ED.sujo) { API.removerArteTemplate(t.base_caminho); API.removerArteTemplate(t.sobre_caminho); }
+      ED.sujo = false;
       irPara("templates");
     });
     $("#tpl-salvar").addEventListener("click", async () => {
@@ -1105,7 +1140,7 @@
       `PEDIDO DO USUÁRIO: equipe comemorando a meta batida em um escritório moderno`,
       estilo ? `ESTILO VISUAL: ${estilo.nome}. ${estilo.instrucao}` : "",
       m.descricao ? `IDENTIDADE VISUAL DA MARCA: ${m.descricao}` : "",
-      S.cores.length ? `PALETA OBRIGATÓRIA (use estas cores como dominantes, respeitando os papéis; tons naturais como pele e sombras são permitidos):\n${S.cores.map((c) => `- ${c.nome} ${c.hex.toUpperCase()} (${papeis[c.papel] || c.papel})`).join("\n")}` : "",
+      S.cores.length ? `PALETA DA MARCA (as cores da imagem devem vir desta paleta e aparecer de forma intencional, respeitando os papéis e o equilíbrio descrito na identidade; não tinja a imagem inteira; tons naturais como pele, madeira e sombras são permitidos):\n${S.cores.map((c) => `- ${c.nome} ${c.hex.toUpperCase()} (${papeis[c.papel] || c.papel})`).join("\n")}` : "",
       m.sempre ? `SEMPRE: ${m.sempre}` : "",
       m.nunca ? `NUNCA: ${m.nunca}` : "",
       `COMPOSIÇÃO: formato 4:5. Mantenha áreas limpas e com pouco detalhe perto das bordas para a aplicação posterior de logo e textos.`,
