@@ -107,6 +107,9 @@
           <span class="editor-info" id="editor-info"></span>
           <div class="editor-acoes">
             <button type="button" class="btn btn-sm btn-primario" id="salvar-edicao" hidden>Salvar em Minhas criações</button>
+            <button type="button" class="icone" id="botao-guias" title="Guias e alinhamento" aria-label="Guias e alinhamento" aria-pressed="false">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3v18M3 15h18" stroke-dasharray="2.5 2.5"/><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+            </button>
             <button type="button" class="icone" id="desfazer" title="Desfazer (Ctrl+Z)" aria-label="Desfazer">
               <svg viewBox="0 0 24 24" width="18" height="18"><path d="M9 7H4V2M4 7a9 9 0 1 1-1 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
@@ -123,10 +126,20 @@
             <button type="button" class="btn btn-sm btn-primario" id="aplicar-recorte">Aplicar recorte</button>
           </div>
         </div>
+        <div class="barra-guias" id="barra-guias" hidden>
+          <span class="barra-guias-titulo">Guias</span>
+          <button type="button" class="btn btn-sm btn-claro" data-guia="v">+ Vertical</button>
+          <button type="button" class="btn btn-sm btn-claro" data-guia="h">+ Horizontal</button>
+          <button type="button" class="btn btn-sm btn-claro" data-guia="margem" title="Guias a 5% das bordas">Margens</button>
+          <button type="button" class="btn btn-sm btn-claro" data-guia="limpar" id="guias-limpar">Apagar guias</button>
+          <label class="checar-sm"><input type="checkbox" id="guias-mostrar" checked> Mostrar guias</label>
+          <label class="checar-sm"><input type="checkbox" id="guias-ima" checked> Alinhamento automático</label>
+          <span class="barra-guias-dica">Arraste uma guia para mover; para apagar, arraste para fora da arte. As guias não aparecem na imagem baixada.</span>
+        </div>
         <div class="tela-wrap">
           <canvas id="tela" aria-label="Imagem em edição"></canvas>
         </div>
-        <p class="dica-editor">Arraste textos e a logo direto na imagem. <kbd>Delete</kbd> remove o item selecionado.</p>
+        <p class="dica-editor">Arraste textos e a logo direto na imagem: eles se alinham sozinhos com outros itens, o centro e as guias (segure <kbd>Alt</kbd> para soltar livre). Setas movem 1 px (<kbd>Shift</kbd>: 10 px). <kbd>Delete</kbd> remove.</p>
       </div>
     </section>
 
@@ -264,13 +277,15 @@
             <button type="button" class="btn btn-sm btn-ghost" data-novo-texto="chamada">+ Chamada</button>
           </div>
           <div class="camadas" id="camadas-texto"></div>
+          <p class="ajuda dica-multi">Shift + clique (ou arrastar numa área vazia da arte) seleciona vários. <kbd>Ctrl</kbd>+<kbd>A</kbd> seleciona tudo.</p>
           <div id="props-texto" hidden>
-            <label class="campo"><span class="rotulo">Texto</span><textarea id="tx-texto" rows="3"></textarea></label>
+            <p class="aviso-multi" id="tx-multi" hidden></p>
+            <label class="campo" id="tx-texto-campo"><span class="rotulo">Texto</span><textarea id="tx-texto" rows="3"></textarea></label>
             <label class="campo"><span class="rotulo">Fonte</span><select id="tx-fonte"></select></label>
             <div class="duas-col">
               <label class="campo"><span class="rotulo">Peso</span>
                 <select id="tx-peso">
-                  <option value="400">Regular</option><option value="500">Médio</option>
+                  <option value="300">Light</option><option value="400">Regular</option><option value="500">Médio</option>
                   <option value="600">Semibold</option><option value="700">Bold</option>
                   <option value="800">Extra bold</option><option value="900">Black</option>
                 </select>
@@ -278,12 +293,13 @@
               <label class="campo checar"><input type="checkbox" id="tx-caixa"> Caixa alta</label>
             </div>
             <label class="deslizador">Tamanho <output>0</output><input type="range" min="1.5" max="20" step="0.1" id="tx-tamanho"></label>
+            <label class="deslizador">Espaçamento entre linhas <output>0</output><input type="range" min="0.7" max="2.2" step="0.02" id="tx-entrelinha"></label>
             <label class="deslizador">Largura do bloco <output>0</output><input type="range" min="20" max="100" id="tx-largura"></label>
             <span class="rotulo">Cor</span>
             <div class="paleta" id="tx-cores"></div>
             <span class="rotulo">Fundo do texto</span>
             <div class="paleta" id="tx-fundos"></div>
-            <span class="rotulo">Alinhamento e posição</span>
+            <span class="rotulo">Alinhamento do texto</span>
             <div class="linha-botoes">
               <div class="segmentado segmentado-sm" id="tx-alinhar">
                 <button type="button" data-al="left">Esq.</button>
@@ -291,12 +307,16 @@
                 <button type="button" data-al="right">Dir.</button>
               </div>
             </div>
-            <div class="linha-botoes">
-              <div class="segmentado segmentado-sm" id="tx-posicao">
-                <button type="button" data-y="topo">Topo</button>
-                <button type="button" data-y="meio">Meio</button>
-                <button type="button" data-y="base">Base</button>
-              </div>
+          </div>
+          <div id="alinhar-itens" hidden>
+            <span class="rotulo" id="alinhar-rotulo">Posicionar na arte</span>
+            <div class="grade-alinhar">
+                <button type="button" class="icone" data-alinhar="esquerda" title="Alinhar à esquerda" aria-label="Alinhar à esquerda"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 3v18" /><rect x="7" y="6" width="12" height="4" rx="1"/><rect x="7" y="14" width="8" height="4" rx="1"/></svg></button>
+                <button type="button" class="icone" data-alinhar="centro-h" title="Centralizar na horizontal" aria-label="Centralizar na horizontal"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 3v18" /><rect x="5" y="6" width="14" height="4" rx="1"/><rect x="8" y="14" width="8" height="4" rx="1"/></svg></button>
+                <button type="button" class="icone" data-alinhar="direita" title="Alinhar à direita" aria-label="Alinhar à direita"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 3v18" /><rect x="5" y="6" width="12" height="4" rx="1"/><rect x="9" y="14" width="8" height="4" rx="1"/></svg></button>
+                <button type="button" class="icone" data-alinhar="topo" title="Alinhar no topo" aria-label="Alinhar no topo"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 4h18" /><rect x="6" y="7" width="4" height="12" rx="1"/><rect x="14" y="7" width="4" height="8" rx="1"/></svg></button>
+                <button type="button" class="icone" data-alinhar="centro-v" title="Centralizar na vertical" aria-label="Centralizar na vertical"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 12h18" /><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="8" width="4" height="8" rx="1"/></svg></button>
+                <button type="button" class="icone" data-alinhar="base" title="Alinhar na base" aria-label="Alinhar na base"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 20h18" /><rect x="6" y="5" width="4" height="12" rx="1"/><rect x="14" y="9" width="4" height="8" rx="1"/></svg></button>
             </div>
             <button type="button" class="btn btn-sm btn-perigo" id="tx-remover">Remover texto</button>
           </div>

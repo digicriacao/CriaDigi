@@ -172,7 +172,10 @@ python3 -m http.server 8000
 **Editor**
 - Recortar (proporção livre ou travada), resize em pixels, girar e espelhar.
 - Brilho, contraste, saturação, temperatura, filtro da marca e degradê para texto.
-- Textos com fontes e cores da marca, arrastáveis; logo padrão aplicada sozinha.
+- Textos com fontes e cores da marca, arrastáveis; logo padrão aplicada sozinha. Espaçamento entre linhas ajustável.
+- **Vários itens de uma vez:** Shift + clique (na arte ou na lista), arrastar numa área vazia ou Ctrl+A. Mover, trocar fonte, peso, cor, fundo, tamanho (proporcional) e alinhamento valem para todos; botões para alinhar os itens entre si (ou na arte, com um só).
+- **Alinhamento automático:** ao arrastar, o item encaixa nas bordas e centros da arte, dos outros itens e das guias, e aparece uma linha pink mostrando o alinhamento (Alt solta livre; Shift trava na horizontal/vertical). Setas movem 1 px, Shift + setas 10 px.
+- **Guias:** botão de guias no topo do editor: guias verticais, horizontais e de margem (5%), arrastáveis; arraste para fora da arte para apagar. Só aparecem para quem edita, nunca na imagem baixada, e ficam salvas no navegador.
 - **Refinar com IA** mantendo textos e logo; desfazer/refazer; exportar em PNG, JPG ou WebP.
 
 **Admin (admin.html, link no rodapé)**

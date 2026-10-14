@@ -22,6 +22,13 @@
       this._raf = 0;
       this._baseSuja = true;
       this.baseCache = document.createElement("canvas");
+      // guias: só aparecem para quem edita (nunca saem na imagem baixada)
+      this.guias = carregarGuias();      // [{ id, eixo: "v" | "h", pos: 0..1 }]
+      this.mostrarGuias = true;
+      this.ima = true;                   // alinhamento automático ao arrastar
+      this.aoMudarGuias = opcoes.aoMudarGuias || (() => {});
+      this._linhas = [];                 // linhas de alinhamento visíveis durante o arraste
+      this._laco = null;                 // retângulo de seleção em grupo
       this._resetar();
       this._ligarPonteiro();
     }
@@ -37,7 +44,8 @@
       this.degrade = { cor: "#222323", forca: 0, lado: "baixo" };
       this.logo = { id: null, pos: "inf-dir", tamanho: 16, x: null, y: null };
       this.textos = [];
-      this.sel = null;
+      this.sel = null;     // item principal (id de texto ou "logo")
+      this.sels = [];      // todos os itens selecionados
     }
 
     get temImagem() { return !!this.src; }
@@ -154,7 +162,8 @@
       const giroMudou = s.rot !== this.rot || s.flipH !== this.flipH || s.flipV !== this.flipV;
       Object.assign(this, s);
       if (giroMudou && this.src) this._refazerFonte();
-      if (this.sel && this.sel !== "logo" && !this.textos.some((t) => t.id === this.sel)) this.sel = null;
+      this.sels = this.sels.filter((id) => id === "logo" ? !!this.logo.id : this.textos.some((t) => t.id === id));
+      if (!this.sels.includes(this.sel)) this.sel = this.sels[this.sels.length - 1] || null;
       this._baseSuja = true;
       this.desenhar();
       this.aoMudar();
@@ -201,11 +210,12 @@
         alinhar: "left",
         caixaAlta: false,
         largura: 0.8,        // largura máxima do bloco (fração da imagem)
+        entrelinha: 1.12,    // espaçamento entre linhas (× tamanho da letra)
         x: 0.08, y: 0.08,    // posição do bloco (fração da imagem)
         ...opcoes,
       };
       this.textos.push(t);
-      this.sel = t.id;
+      this.selecionar(t.id);
       this.marcar();
       this.desenhar();
       this.aoSelecionar(this.sel);
@@ -213,13 +223,117 @@
     }
 
     textoSelecionado() { return this.textos.find((t) => t.id === this.sel) || null; }
+    textosSelecionados() { return this.textos.filter((t) => this.sels.includes(t.id)); }
+
+    // seleção: id único, lista de ids, ou null; somar = adiciona/tira (Shift/Ctrl + clique)
+    selecionar(ids, somar = false) {
+      const lista = ids == null ? [] : Array.isArray(ids) ? ids : [ids];
+      const ultimo = lista[lista.length - 1];
+      if (somar) {
+        for (const id of lista) {
+          if (this.sels.includes(id)) this.sels = this.sels.filter((x) => x !== id);
+          else this.sels.push(id);
+        }
+      } else this.sels = [...new Set(lista)];
+      this.sel = this.sels.includes(ultimo) ? ultimo : this.sels[this.sels.length - 1] || null;
+      this.desenhar();
+      this.aoSelecionar(this.sel);
+    }
+
+    selecionarTudo() {
+      const ids = this.textos.map((t) => t.id);
+      if (this.logo.id && this.logos.get(this.logo.id)) ids.push("logo");
+      this.selecionar(ids);
+    }
 
     removerSelecionado() {
-      if (!this.sel) return;
-      if (this.sel === "logo") this.logo.id = null;
-      else this.textos = this.textos.filter((t) => t.id !== this.sel);
-      this.sel = null;
+      if (!this.sels.length) return;
+      if (this.sels.includes("logo")) this.logo.id = null;
+      this.textos = this.textos.filter((t) => !this.sels.includes(t.id));
+      this.sel = null; this.sels = [];
       this.marcar(); this.desenhar(); this.aoSelecionar(null);
+    }
+
+    // caixa (em pixels) de um item ou do grupo selecionado
+    _caixaDe(id) { return id === "logo" ? this.logo._caixa : (this.textos.find((t) => t.id === id) || {})._caixa; }
+    _caixaGrupo(ids = this.sels) {
+      const cs = ids.map((id) => this._caixaDe(id)).filter(Boolean);
+      if (!cs.length) return null;
+      return {
+        x0: Math.min(...cs.map((c) => c.x0)), y0: Math.min(...cs.map((c) => c.y0)),
+        x1: Math.max(...cs.map((c) => c.x1)), y1: Math.max(...cs.map((c) => c.y1)),
+      };
+    }
+
+    // desloca os itens selecionados em pixels
+    _deslocar(ids, ini, dx, dy) {
+      const W = this.out.w, H = this.out.h;
+      for (const id of ids) {
+        const o = ini[id];
+        if (!o) continue;
+        if (id === "logo") { this.logo.x = clamp((o.x * W + dx) / W, -0.2, 1.2); this.logo.y = clamp((o.y * H + dy) / H, -0.2, 1.2); }
+        else {
+          const t = this.textos.find((x) => x.id === id);
+          if (t) { t.x = clamp((o.x * W + dx) / W, -0.5, 1.2); t.y = clamp((o.y * H + dy) / H, -0.5, 1.2); }
+        }
+      }
+    }
+    _posicoes(ids) {
+      const ini = {};
+      for (const id of ids) {
+        if (id === "logo") { const c = this.logo._caixa; if (c) ini.logo = { x: c.cx / this.out.w, y: c.cy / this.out.h }; }
+        else { const t = this.textos.find((x) => x.id === id); if (t) ini[id] = { x: t.x, y: t.y }; }
+      }
+      return ini;
+    }
+
+    // setas do teclado: move a seleção (px na imagem final)
+    mover(dx, dy) {
+      if (!this.sels.length) return;
+      this._deslocar(this.sels, this._posicoes(this.sels), dx, dy);
+      this.desenhar();
+      clearTimeout(this._tMover);
+      this._tMover = setTimeout(() => this.marcar(), 350);
+    }
+
+    // alinha: com 1 item, em relação à arte; com vários, entre eles
+    // modo: esquerda | centro-h | direita | topo | centro-v | base
+    alinhar(modo) {
+      const ids = this.sels.filter((id) => this._caixaDe(id));
+      if (!ids.length) return;
+      const ref = ids.length > 1 ? this._caixaGrupo(ids) : { x0: 0, y0: 0, x1: this.out.w, y1: this.out.h };
+      const m = ids.length > 1 ? 0 : Math.min(this.out.w, this.out.h) * 0.06;   // sozinho: respeita uma margem
+      const ini = this._posicoes(ids);
+      for (const id of ids) {
+        const c = this._caixaDe(id);
+        let dx = 0, dy = 0;
+        if (modo === "esquerda") dx = ref.x0 + m - c.x0;
+        if (modo === "direita") dx = ref.x1 - m - c.x1;
+        if (modo === "centro-h") dx = (ref.x0 + ref.x1) / 2 - (c.x0 + c.x1) / 2;
+        if (modo === "topo") dy = ref.y0 + m - c.y0;
+        if (modo === "base") dy = ref.y1 - m - c.y1;
+        if (modo === "centro-v") dy = (ref.y0 + ref.y1) / 2 - (c.y0 + c.y1) / 2;
+        this._deslocar([id], ini, dx, dy);
+      }
+      this.marcar(); this.desenhar(); this.aoSelecionar(this.sel);
+    }
+
+    // ------------------------------------------------------------ guias
+    adicionarGuia(eixo, pos = 0.5) {
+      this.guias.push({ id: window.CriaDigi.uid(), eixo, pos });
+      this.mostrarGuias = true;
+      this._salvarGuias();
+    }
+    guiasDeMargem(f = 0.05) {
+      for (const pos of [f, 1 - f]) { this.guias.push({ id: window.CriaDigi.uid(), eixo: "v", pos }); this.guias.push({ id: window.CriaDigi.uid(), eixo: "h", pos }); }
+      this.mostrarGuias = true;
+      this._salvarGuias();
+    }
+    limparGuias() { this.guias = []; this._salvarGuias(); }
+    _salvarGuias() {
+      try { localStorage.setItem(GUIAS_KEY, JSON.stringify(this.guias)); } catch (_) { /* sem armazenamento */ }
+      this.desenhar();
+      this.aoMudarGuias();
     }
 
     // ------------------------------------------------------------ desenho
@@ -269,6 +383,108 @@
       ctx.drawImage(this.baseCache, 0, 0);
       this._desenharLogo(ctx, W, H, comUI);
       for (const t of this.textos) this._desenharTexto(ctx, t, W, H, comUI);
+      if (comUI) this._desenharUI(ctx, W, H);
+    }
+
+    // espessura de 1 px na tela, qualquer que seja o tamanho da imagem
+    _px() {
+      const r = this.cv.getBoundingClientRect();
+      return r.width ? this.cv.width / r.width : Math.max(1, this.out.w / 800);
+    }
+
+    _desenharUI(ctx, W, H) {
+      const k = this._px();
+      ctx.save();
+      // guias
+      if (this.mostrarGuias && this.guias.length) {
+        ctx.strokeStyle = "#16B6F2"; ctx.lineWidth = k;
+        for (const g of this.guias) {
+          ctx.beginPath();
+          if (g.eixo === "v") { const x = Math.round(g.pos * W) + 0.5 * k; ctx.moveTo(x, 0); ctx.lineTo(x, H); }
+          else { const y = Math.round(g.pos * H) + 0.5 * k; ctx.moveTo(0, y); ctx.lineTo(W, y); }
+          ctx.stroke();
+        }
+      }
+      // seleção
+      for (const id of this.sels) {
+        const c = this._caixaDe(id);
+        if (c) contorno(ctx, c, k, id === this.sel || this.sels.length === 1);
+      }
+      if (this.sels.length > 1) {
+        const g = this._caixaGrupo();
+        if (g) {
+          ctx.strokeStyle = "rgba(234,3,86,.55)"; ctx.lineWidth = k; ctx.setLineDash([]);
+          ctx.strokeRect(g.x0 - 8 * k, g.y0 - 8 * k, g.x1 - g.x0 + 16 * k, g.y1 - g.y0 + 16 * k);
+        }
+      }
+      // linhas de alinhamento (só durante o arraste)
+      ctx.strokeStyle = "#FF0066"; ctx.lineWidth = 1.5 * k; ctx.setLineDash([]);
+      for (const l of this._linhas) {
+        ctx.beginPath();
+        if (l.eixo === "v") { ctx.moveTo(l.pos, l.a); ctx.lineTo(l.pos, l.b); }
+        else { ctx.moveTo(l.a, l.pos); ctx.lineTo(l.b, l.pos); }
+        ctx.stroke();
+      }
+      // retângulo de seleção em grupo
+      if (this._laco) {
+        const r = this._laco;
+        ctx.fillStyle = "rgba(234,3,86,.08)"; ctx.strokeStyle = "#EA0356"; ctx.lineWidth = k;
+        ctx.setLineDash([4 * k, 3 * k]);
+        const x = Math.min(r.x0, r.x1), y = Math.min(r.y0, r.y1);
+        ctx.fillRect(x, y, Math.abs(r.x1 - r.x0), Math.abs(r.y1 - r.y0));
+        ctx.strokeRect(x, y, Math.abs(r.x1 - r.x0), Math.abs(r.y1 - r.y0));
+      }
+      ctx.restore();
+    }
+
+    // ímã: encaixa a caixa em movimento nas bordas e centros da arte, de outros itens e das guias.
+    // Devolve o ajuste {dx, dy} e prepara as linhas que aparecem na tela.
+    _ima(caixa, ignorar) {
+      this._linhas = [];
+      if (!this.ima) return { dx: 0, dy: 0 };
+      const W = this.out.w, H = this.out.h;
+      const tol = 7 * this._px();
+      const alvosV = [{ v: 0 }, { v: W / 2 }, { v: W }];   // linhas verticais (x)
+      const alvosH = [{ v: 0 }, { v: H / 2 }, { v: H }];   // linhas horizontais (y)
+      if (this.mostrarGuias) for (const g of this.guias) (g.eixo === "v" ? alvosV : alvosH).push({ v: g.pos * (g.eixo === "v" ? W : H), guia: true });
+      const outros = [...this.textos.map((t) => [t.id, t._caixa]), ["logo", this.logo.id ? this.logo._caixa : null]]
+        .filter(([id, c]) => c && !ignorar.includes(id)).map(([, c]) => c);
+      for (const c of outros) {
+        for (const v of [c.x0, (c.x0 + c.x1) / 2, c.x1]) alvosV.push({ v, c });
+        for (const v of [c.y0, (c.y0 + c.y1) / 2, c.y1]) alvosH.push({ v, c });
+      }
+      const melhor = (pontos, alvos) => {
+        let m = null;
+        for (const p of pontos) for (const a of alvos) {
+          const d = a.v - p;
+          if (Math.abs(d) <= tol && (!m || Math.abs(d) < Math.abs(m.d) - 0.01)) m = { d, alvo: a };
+        }
+        return m;
+      };
+      const xs = [caixa.x0, (caixa.x0 + caixa.x1) / 2, caixa.x1];
+      const ys = [caixa.y0, (caixa.y0 + caixa.y1) / 2, caixa.y1];
+      const mv = melhor(xs, alvosV), mh = melhor(ys, alvosH);
+      const dx = mv ? mv.d : 0, dy = mh ? mh.d : 0;
+      const nova = { x0: caixa.x0 + dx, x1: caixa.x1 + dx, y0: caixa.y0 + dy, y1: caixa.y1 + dy };
+      // desenha todas as linhas que ficaram alinhadas depois do encaixe
+      const marca = (eixo, pontos, alvos, a0, a1) => {
+        const vistos = new Set();
+        for (const p of pontos) for (const a of alvos) {
+          if (Math.abs(a.v - p) > 0.5) continue;
+          const chave = Math.round(a.v);
+          let a_ = a0, b_ = a1;
+          if (a.c) { a_ = Math.min(a0, eixo === "v" ? a.c.y0 : a.c.x0); b_ = Math.max(a1, eixo === "v" ? a.c.y1 : a.c.x1); }
+          else { a_ = 0; b_ = eixo === "v" ? H : W; }
+          const ja = this._linhas.find((l) => l.eixo === eixo && Math.round(l.pos) === chave);
+          if (ja) { ja.a = Math.min(ja.a, a_); ja.b = Math.max(ja.b, b_); continue; }
+          if (vistos.has(chave)) continue;
+          vistos.add(chave);
+          this._linhas.push({ eixo, pos: a.v, a: a_, b: b_ });
+        }
+      };
+      if (mv) marca("v", [nova.x0, (nova.x0 + nova.x1) / 2, nova.x1], alvosV, nova.y0, nova.y1);
+      if (mh) marca("h", [nova.y0, (nova.y0 + nova.y1) / 2, nova.y1], alvosH, nova.x0, nova.x1);
+      return { dx, dy };
     }
 
     _desenharEdicao() {
@@ -294,7 +510,7 @@
       }
       ctx.drawImage(img, cx - lw / 2, cy - lh / 2, lw, lh);
       L._caixa = { x0: cx - lw / 2, y0: cy - lh / 2, x1: cx + lw / 2, y1: cy + lh / 2, cx, cy };
-      if (comUI && this.sel === "logo") contorno(ctx, L._caixa, W);
+
     }
 
     _desenharTexto(ctx, t, W, H, comUI) {
@@ -304,7 +520,8 @@
       const texto = t.caixaAlta ? t.texto.toLocaleUpperCase("pt-BR") : t.texto;
       const maxW = t.largura * W;
       const linhas = quebrar(ctx, texto, maxW);
-      const lh = px * 1.12;
+      const lh = px * (t.entrelinha || 1.12);
+      const alturaLinha = px * 1.12;
       const larguras = linhas.map((l) => ctx.measureText(l).width);
       const larguraBloco = Math.max(1, ...larguras);
       const x0 = t.x * W, y0 = t.y * H;
@@ -315,7 +532,7 @@
         linhas.forEach((l, i) => {
           const lw = larguras[i];
           const lx = t.alinhar === "center" ? ancoraX - lw / 2 : t.alinhar === "right" ? ancoraX - lw : x0;
-          retArredondado(ctx, lx - pad, y0 + i * lh - pad * 0.55, lw + pad * 2, lh + pad * 0.5, px * 0.12);
+          retArredondado(ctx, lx - pad, y0 + i * lh - pad * 0.55, lw + pad * 2, alturaLinha + pad * 0.5, px * 0.12);
           ctx.fill();
         });
       }
@@ -323,8 +540,7 @@
       ctx.textAlign = t.alinhar;
       linhas.forEach((l, i) => ctx.fillText(l, ancoraX, y0 + i * lh + px * 0.04));
       ctx.textAlign = "left";
-      t._caixa = { x0: x0 - pad, y0: y0 - pad * 0.55, x1: x0 + larguraBloco + pad, y1: y0 + linhas.length * lh + pad * 0.3 };
-      if (comUI && this.sel === t.id) contorno(ctx, t._caixa, W);
+      t._caixa = { x0: x0 - pad, y0: y0 - pad * 0.55, x1: x0 + larguraBloco + pad, y1: y0 + (linhas.length - 1) * lh + alturaLinha + pad * 0.3 };
     }
 
     // ------------------------------------------------------------ recorte
@@ -408,6 +624,26 @@
       };
     }
 
+    _acertar(p) {
+      for (let i = this.textos.length - 1; i >= 0; i--) {
+        const c = this.textos[i]._caixa;
+        if (c && p.x >= c.x0 && p.x <= c.x1 && p.y >= c.y0 && p.y <= c.y1) return this.textos[i].id;
+      }
+      const cl = this.logo.id ? this.logo._caixa : null;
+      if (cl && p.x >= cl.x0 && p.x <= cl.x1 && p.y >= cl.y0 && p.y <= cl.y1) return "logo";
+      return null;
+    }
+    _guiaEm(p) {
+      if (!this.mostrarGuias) return null;
+      const tol = 6 * p.escala;
+      for (let i = this.guias.length - 1; i >= 0; i--) {
+        const g = this.guias[i];
+        if (g.eixo === "v" && Math.abs(p.x - g.pos * this.out.w) <= tol) return g;
+        if (g.eixo === "h" && Math.abs(p.y - g.pos * this.out.h) <= tol) return g;
+      }
+      return null;
+    }
+
     _ligarPonteiro() {
       const cv = this.cv;
       let arraste = null;
@@ -430,23 +666,28 @@
           cv.setPointerCapture(ev.pointerId);
           return;
         }
-        // edição: acerta texto (de cima para baixo) e depois a logo
-        let alvo = null;
-        for (let i = this.textos.length - 1; i >= 0; i--) {
-          const c = this.textos[i]._caixa;
-          if (c && p.x >= c.x0 && p.x <= c.x1 && p.y >= c.y0 && p.y <= c.y1) { alvo = this.textos[i]; break; }
-        }
-        const cl = this.logo._caixa;
-        if (!alvo && cl && p.x >= cl.x0 && p.x <= cl.x1 && p.y >= cl.y0 && p.y <= cl.y1) {
-          this.sel = "logo";
-          arraste = { tipo: "logo", dx: p.x - cl.cx, dy: p.y - cl.cy, moveu: false };
+        const somar = ev.shiftKey || ev.ctrlKey || ev.metaKey;
+        const alvo = this._acertar(p);
+        const guia = !alvo ? this._guiaEm(p) : null;
+        if (guia) {
+          arraste = { tipo: "guia", g: guia };
         } else if (alvo) {
-          this.sel = alvo.id;
-          arraste = { tipo: "texto", t: alvo, dx: p.x - alvo.x * this.out.w, dy: p.y - alvo.y * this.out.h, moveu: false };
+          const jaEstava = this.sels.includes(alvo);
+          if (somar) this.selecionar(alvo, true);
+          else if (!jaEstava) this.selecionar(alvo);
+          else { this.sel = alvo; this.aoSelecionar(alvo); }
+          if (this.sels.includes(alvo)) {
+            const ids = [...this.sels];
+            // clique simples num item de um grupo (sem arrastar) deixa só ele selecionado
+            const isolar = !somar && jaEstava && ids.length > 1 ? alvo : null;
+            arraste = { tipo: "itens", ids, ini: this._posicoes(ids), caixa: this._caixaGrupo(ids), x: p.x, y: p.y, moveu: false, isolar };
+          }
         } else {
-          this.sel = null;
+          // área vazia: começa a seleção em grupo (Shift soma à seleção atual)
+          if (!somar) this.selecionar(null);
+          arraste = { tipo: "laco", somar, base: [...this.sels] };
+          this._laco = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
         }
-        this.aoSelecionar(this.sel);
         this.desenhar();
         if (arraste) cv.setPointerCapture(ev.pointerId);
       });
@@ -456,21 +697,47 @@
         const p = this._ponto(ev);
         if (!arraste) {
           if (this.modo === "editar") {
-            const sobre = this.textos.some((t) => t._caixa && p.x >= t._caixa.x0 && p.x <= t._caixa.x1 && p.y >= t._caixa.y0 && p.y <= t._caixa.y1)
-              || (this.logo._caixa && p.x >= this.logo._caixa.x0 && p.x <= this.logo._caixa.x1 && p.y >= this.logo._caixa.y0 && p.y <= this.logo._caixa.y1);
-            cv.style.cursor = sobre ? "move" : "default";
+            const g = !this._acertar(p) && this._guiaEm(p);
+            cv.style.cursor = this._acertar(p) ? "move" : g ? (g.eixo === "v" ? "col-resize" : "row-resize") : "default";
           } else cv.style.cursor = "crosshair";
           return;
         }
         const W = this.out.w, H = this.out.h;
-        if (arraste.tipo === "texto") {
-          arraste.t.x = clamp((p.x - arraste.dx) / W, -0.2, 1);
-          arraste.t.y = clamp((p.y - arraste.dy) / H, -0.2, 1);
+        if (arraste.tipo === "itens") {
+          let dx = p.x - arraste.x, dy = p.y - arraste.y;
+          if (!arraste.moveu && Math.hypot(dx, dy) < 3 * p.escala) return;   // clique sem querer arrastar
+          if (ev.shiftKey) { if (Math.abs(dx) > Math.abs(dy)) dy = 0; else dx = 0; }   // Shift: só na horizontal ou vertical
           arraste.moveu = true;
-        } else if (arraste.tipo === "logo") {
-          this.logo.x = clamp((p.x - arraste.dx) / W, 0, 1);
-          this.logo.y = clamp((p.y - arraste.dy) / H, 0, 1);
+          const c = arraste.caixa;
+          if (c && !ev.altKey) {
+            const aj = this._ima({ x0: c.x0 + dx, x1: c.x1 + dx, y0: c.y0 + dy, y1: c.y1 + dy }, arraste.ids);
+            dx += aj.dx; dy += aj.dy;
+          } else this._linhas = [];
+          this._deslocar(arraste.ids, arraste.ini, dx, dy);
+        } else if (arraste.tipo === "guia") {
+          const g = arraste.g;
+          let v = g.eixo === "v" ? p.x : p.y;
+          // a guia também encaixa no centro da arte e nas bordas dos itens
+          if (!ev.altKey) {
+            const tol = 7 * p.escala, L = g.eixo === "v" ? W : H;
+            const alvos = [L / 2];
+            for (const c of [...this.textos.map((t) => t._caixa), this.logo.id ? this.logo._caixa : null].filter(Boolean)) {
+              alvos.push(...(g.eixo === "v" ? [c.x0, (c.x0 + c.x1) / 2, c.x1] : [c.y0, (c.y0 + c.y1) / 2, c.y1]));
+            }
+            const a = alvos.find((x) => Math.abs(x - v) <= tol);
+            if (a != null) v = a;
+          }
+          g.pos = v / (g.eixo === "v" ? W : H);
           arraste.moveu = true;
+        } else if (arraste.tipo === "laco") {
+          this._laco.x1 = p.x; this._laco.y1 = p.y;
+          const r = this._laco;
+          const x0 = Math.min(r.x0, r.x1), x1 = Math.max(r.x0, r.x1), y0 = Math.min(r.y0, r.y1), y1 = Math.max(r.y0, r.y1);
+          const dentro = (c) => c && c.x1 >= x0 && c.x0 <= x1 && c.y1 >= y0 && c.y0 <= y1;
+          const ids = this.textos.filter((t) => dentro(t._caixa)).map((t) => t.id);
+          if (this.logo.id && dentro(this.logo._caixa)) ids.push("logo");
+          this.sels = [...new Set([...(arraste.somar ? arraste.base : []), ...ids])];
+          this.sel = this.sels[this.sels.length - 1] || null;
         } else if (arraste.tipo === "mover-recorte") {
           const k = this._kRecorte, r = this._recorte;
           r.x = clamp(p.x / k - arraste.dx, 0, this.srcC.width - r.w);
@@ -482,10 +749,18 @@
       });
 
       const soltar = () => {
-        if (arraste && (arraste.moveu || arraste.tipo === "texto" || arraste.tipo === "logo")) {
-          if (arraste.moveu) { this.marcar(); this.aoSelecionar(this.sel); }
+        if (!arraste) return;
+        if (arraste.tipo === "itens" && arraste.moveu) { this.marcar(); this.aoSelecionar(this.sel); }
+        if (arraste.tipo === "itens" && !arraste.moveu && arraste.isolar) this.selecionar(arraste.isolar);
+        if (arraste.tipo === "guia") {
+          // arrastou a guia para fora da arte: apaga
+          if (arraste.g.pos < -0.005 || arraste.g.pos > 1.005) this.guias = this.guias.filter((g) => g !== arraste.g);
+          this._salvarGuias();
         }
+        if (arraste.tipo === "laco") { this._laco = null; this.aoSelecionar(this.sel); }
+        this._linhas = [];
         arraste = null;
+        this.desenhar();
       };
       cv.addEventListener("pointerup", soltar);
       cv.addEventListener("pointercancel", soltar);
@@ -551,13 +826,22 @@
     ctx.arcTo(x, y, x + w, y, r);
     ctx.closePath();
   }
-  function contorno(ctx, c, W) {
+  // k = tamanho de 1 px da tela em pixels da imagem
+  function contorno(ctx, c, k, principal = true) {
     ctx.save();
     ctx.strokeStyle = "#EA0356";
-    ctx.lineWidth = Math.max(2, W / 400);
-    ctx.setLineDash([W / 90, W / 140]);
-    ctx.strokeRect(c.x0 - 4, c.y0 - 4, c.x1 - c.x0 + 8, c.y1 - c.y0 + 8);
+    ctx.lineWidth = (principal ? 2 : 1.5) * k;
+    ctx.setLineDash(principal ? [6 * k, 4 * k] : [3 * k, 3 * k]);
+    const m = 4 * k;
+    ctx.strokeRect(c.x0 - m, c.y0 - m, c.x1 - c.x0 + 2 * m, c.y1 - c.y0 + 2 * m);
     ctx.restore();
+  }
+  const GUIAS_KEY = "criadigi-guias";
+  function carregarGuias() {
+    try {
+      const g = JSON.parse(localStorage.getItem(GUIAS_KEY) || "[]");
+      return Array.isArray(g) ? g.filter((x) => x && (x.eixo === "v" || x.eixo === "h") && typeof x.pos === "number") : [];
+    } catch (_) { return []; }
   }
   function quebrar(ctx, texto, maxW) {
     const saida = [];

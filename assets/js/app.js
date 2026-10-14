@@ -55,7 +55,7 @@
     S.estilo = S.estilos.filter((e) => e.ativo !== false)[0] || null;
     S.formato = FORMATOS[0];   // o primeiro formato da lista do admin já vem marcado
 
-    ed = new Editor($("#tela"), { aoMudar: sincronizarFerramentas, aoSelecionar: aoSelecionar });
+    ed = new Editor($("#tela"), { aoMudar: sincronizarFerramentas, aoSelecionar: aoSelecionar, aoMudarGuias: sincronizarGuias });
     const fontes = carregarFontes(S.arquivos).then(() => { if (ed) ed.sujarBase(); if (S.tpl) desenharTpl(); });
     prontos = Promise.all([fontes, carregarLogos()]).catch(() => {});
 
@@ -686,7 +686,7 @@
     if (window.innerWidth <= 900) window.scrollTo({ top: 0 });
     try {
       ed.textos = [];
-      ed.sel = null;
+      ed.sel = null; ed.sels = [];
       await ed.carregar(it.url, it.formato);
       if (semLogo) ed.logo = { ...ed.logo, id: null }; else aplicarLogoPadrao();
       if (it.copy && it.copy.length) {
@@ -1111,26 +1111,47 @@
     $("#tx-fonte").addEventListener("change", (ev) => editarTexto({ fonte: ev.target.value }));
     $("#tx-peso").addEventListener("change", (ev) => editarTexto({ peso: Number(ev.target.value) }));
     $("#tx-caixa").addEventListener("change", (ev) => editarTexto({ caixaAlta: ev.target.checked }));
-    ligarDeslizador($("#tx-tamanho"), (v) => editarTexto({ tamanho: v }, false), (v) => v.toFixed(1));
+    // tamanho: com vários textos, aumenta/diminui todos na mesma proporção (mantém a hierarquia)
+    ligarDeslizador($("#tx-tamanho"), (v) => {
+      const p = ed.textoSelecionado() || ed.textosSelecionados()[0];
+      if (!p) return;
+      const k = v / (p.tamanho || v);
+      editarTexto((t) => ({ tamanho: t === p ? v : Math.max(1, Math.min(30, t.tamanho * k)) }), false);
+    }, (v) => v.toFixed(1));
+    ligarDeslizador($("#tx-entrelinha"), (v) => editarTexto({ entrelinha: v }, false), (v) => v.toFixed(2));
     ligarDeslizador($("#tx-largura"), (v) => editarTexto({ largura: v / 100 }, false), (v) => v + "%");
     $("#tx-cores").addEventListener("click", (ev) => { const b = ev.target.closest(".amostra"); if (b) editarTexto({ cor: b.dataset.hex }); });
     $("#tx-fundos").addEventListener("click", (ev) => { const b = ev.target.closest(".amostra"); if (b) editarTexto({ fundo: b.dataset.hex || null }); });
     $("#tx-alinhar").addEventListener("click", (ev) => { const b = ev.target.closest("button"); if (b) editarTexto({ alinhar: b.dataset.al }); });
-    $("#tx-posicao").addEventListener("click", (ev) => {
-      const b = ev.target.closest("button");
-      const t = ed.textoSelecionado();
-      if (!b || !t) return;
-      const c = t._caixa;
-      const altura = c ? (c.y1 - c.y0) / ed.out.h : 0.1;
-      const y = b.dataset.y === "topo" ? 0.07 : b.dataset.y === "meio" ? 0.5 - altura / 2 : 0.93 - altura;
-      editarTexto({ y });
+    $("#alinhar-itens").addEventListener("click", (ev) => {
+      const b = ev.target.closest("[data-alinhar]");
+      if (b) ed.alinhar(b.dataset.alinhar);
     });
     $("#tx-remover").addEventListener("click", () => ed.removerSelecionado());
     $("#camadas-texto").addEventListener("click", (ev) => {
       const b = ev.target.closest("[data-tid]");
       if (!b) return;
-      ed.sel = b.dataset.tid; ed.desenhar(); aoSelecionar(ed.sel);
+      ed.selecionar(b.dataset.tid, ev.shiftKey || ev.ctrlKey || ev.metaKey);
     });
+
+    // ---- guias
+    $("#botao-guias").addEventListener("click", () => {
+      const bar = $("#barra-guias");
+      bar.hidden = !bar.hidden;
+      $("#botao-guias").setAttribute("aria-pressed", String(!bar.hidden));
+      if (!bar.hidden && !ed.mostrarGuias) { ed.mostrarGuias = true; ed.desenhar(); }
+      sincronizarGuias();
+    });
+    $("#barra-guias").addEventListener("click", (ev) => {
+      const b = ev.target.closest("[data-guia]");
+      if (!b) return;
+      const g = b.dataset.guia;
+      if (g === "v" || g === "h") ed.adicionarGuia(g, 0.5);
+      if (g === "margem") ed.guiasDeMargem(0.05);
+      if (g === "limpar") ed.limparGuias();
+    });
+    $("#guias-mostrar").addEventListener("change", (ev) => { ed.mostrarGuias = ev.target.checked; ed.desenhar(); sincronizarGuias(); });
+    $("#guias-ima").addEventListener("change", (ev) => { ed.ima = ev.target.checked; });
 
     // ---- logo
     montarEscolhaLogo();
@@ -1220,17 +1241,26 @@
     setTimeout(() => { $("#tx-texto").focus(); $("#tx-texto").select(); }, 30);
   }
 
+  // vale para todos os textos selecionados; patch pode ser uma função (t) => ({...})
   function editarTexto(patch, registrar = true) {
-    const t = ed.textoSelecionado();
-    if (!t) return;
-    Object.assign(t, patch);
+    const lista = ed.textosSelecionados();
+    if (!lista.length) return;
+    for (const t of lista) Object.assign(t, typeof patch === "function" ? patch(t) : patch);
     ed.desenhar();
     if (registrar) ed.marcar();
     sincronizarTexto();
   }
 
+  function sincronizarGuias() {
+    if (!ed) return;
+    $("#guias-mostrar").checked = ed.mostrarGuias;
+    $("#guias-ima").checked = ed.ima;
+    $("#guias-limpar").disabled = !ed.guias.length;
+  }
+
   function aoSelecionar(sel) {
-    if (sel === "logo") mostrarFerr("logo");
+    const soLogo = ed.sels.length === 1 && ed.sels[0] === "logo";
+    if (soLogo) mostrarFerr("logo");
     else if (sel) mostrarFerr("texto");
     sincronizarTexto();
     sincronizarFerramentas();
@@ -1239,17 +1269,31 @@
   function sincronizarTexto() {
     const lista = $("#camadas-texto");
     lista.innerHTML = ed.textos.length
-      ? ed.textos.map((t) => `<button type="button" class="camada ${ed.sel === t.id ? "on" : ""}" data-tid="${t.id}">${esc(t.texto.split("\n")[0] || "(vazio)")}</button>`).join("")
+      ? ed.textos.map((t) => `<button type="button" class="camada ${ed.sels.includes(t.id) ? "on" : ""}" data-tid="${t.id}" title="Shift + clique para selecionar vários">${esc(t.texto.split("\n")[0] || "(vazio)")}</button>`).join("")
       : `<p class="ajuda">Adicione um título, subtítulo ou chamada. Os textos usam as fontes e cores da marca.</p>`;
-    const t = ed.textoSelecionado();
+    $(".dica-multi").hidden = ed.textos.length < 2;
+    const sels = ed.textosSelecionados();
+    const nItens = ed.sels.length;
+    const t = sels.find((x) => x.id === ed.sel) || sels[0];
     $("#props-texto").hidden = !t;
+    $("#alinhar-itens").hidden = !nItens || (nItens === 1 && ed.sels[0] === "logo");
+    $("#alinhar-rotulo").textContent = nItens > 1 ? `Alinhar os ${nItens} itens entre si` : "Posicionar na arte";
+    $("#tx-remover").textContent = nItens > 1 ? `Remover ${nItens} itens` : "Remover texto";
     if (!t) return;
+    const multi = sels.length > 1;
+    $("#tx-multi").hidden = !multi && nItens < 2;
+    $("#tx-multi").textContent = multi
+      ? `${sels.length} textos selecionados${ed.sels.includes("logo") ? " + logo" : ""}. Fonte, cor, tamanho e alinhamento valem para todos.`
+      : "Texto + logo selecionados. Arraste para mover juntos.";
+    $("#tx-texto-campo").hidden = multi;
     if (document.activeElement !== $("#tx-texto")) $("#tx-texto").value = t.texto;
     $("#tx-fonte").value = t.fonte;
     $("#tx-peso").value = String(t.peso);
     $("#tx-caixa").checked = !!t.caixaAlta;
     $("#tx-tamanho").value = t.tamanho; $("#tx-tamanho").previousElementSibling.value = Number(t.tamanho).toFixed(1);
     $("#tx-largura").value = Math.round(t.largura * 100); $("#tx-largura").previousElementSibling.value = Math.round(t.largura * 100) + "%";
+    const el = t.entrelinha || 1.12;
+    $("#tx-entrelinha").value = el; $("#tx-entrelinha").previousElementSibling.value = el.toFixed(2);
     marcarSwatch($("#tx-cores"), t.cor);
     marcarSwatch($("#tx-fundos"), t.fundo || "");
     $$("button", $("#tx-alinhar")).forEach((b) => b.classList.toggle("on", b.dataset.al === t.alinhar));
@@ -1366,8 +1410,17 @@
         ev.preventDefault();
         if (ev.shiftKey) ed.refazer(); else ed.desfazer();
       }
-      if ((ev.key === "Delete" || ev.key === "Backspace") && !digitando && ed.sel) { ev.preventDefault(); ed.removerSelecionado(); }
+      if ((ev.key === "Delete" || ev.key === "Backspace") && !digitando && ed.sels.length) { ev.preventDefault(); ed.removerSelecionado(); }
+      if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "a" && !digitando && ed.modo === "editar") { ev.preventDefault(); ed.selecionarTudo(); }
+      const setas = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+      if (setas[ev.key] && !digitando && ed.sels.length && ed.modo === "editar") {
+        ev.preventDefault();
+        const passo = ev.shiftKey ? 10 : 1;
+        ed.mover(setas[ev.key][0] * passo, setas[ev.key][1] * passo);
+        sincronizarFerramentas();
+      }
       if (ev.key === "Escape" && ed.modo === "recorte") cancelarRecorte();
+      else if (ev.key === "Escape" && !digitando && ed.sels.length) ed.selecionar(null);
     });
   }
 
