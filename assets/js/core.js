@@ -9,15 +9,42 @@
   const sb = DEMO ? null : window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_KEY);
 
   // ---------------------------------------------------------------- formatos
-  const FORMATOS = [
-    { id: "feed-quadrado", nome: "Feed quadrado", w: 1080, h: 1080, prop: "1:1" },
-    { id: "feed-retrato", nome: "Feed retrato", w: 1080, h: 1350, prop: "4:5" },
-    { id: "story", nome: "Story / Reels", w: 1080, h: 1920, prop: "9:16" },
-    { id: "banner", nome: "Banner / Slide", w: 1920, h: 1080, prop: "16:9" },
-    { id: "linkedin", nome: "Post LinkedIn", w: 1200, h: 628, prop: "16:9" },
-    { id: "email", nome: "Topo de e-mail", w: 1200, h: 400, prop: "21:9" },
-    { id: "cartaz", nome: "Cartaz A4", w: 1240, h: 1754, prop: "2:3" },
-  ];
+  // formatos padrão (o admin edita a lista; ela substitui esta na hora de carregar)
+  const FORMATOS_PADRAO = [
+    { nome: "Feed quadrado", largura: 1080, altura: 1080 },
+    { nome: "Feed retrato", largura: 1080, altura: 1350 },
+    { nome: "Story / Reels", largura: 1080, altura: 1920 },
+    { nome: "Banner / Slide", largura: 1920, altura: 1080 },
+    { nome: "Post LinkedIn", largura: 1200, altura: 628 },
+    { nome: "Topo de e-mail", largura: 1200, altura: 400 },
+    { nome: "Cartaz A4", largura: 1240, altura: 1754 },
+  ].map((f, i) => ({ id: "padrao-" + (i + 1), ordem: i + 1, ativo: true, ...f }));
+
+  // proporções que o Gemini aceita; o formato usa a mais próxima e o editor recorta no tamanho exato
+  const PROPORCOES_IA = ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"];
+  function proporcaoIA(w, h) {
+    const alvo = Math.log(w / h);
+    let melhor = "1:1", dif = Infinity;
+    for (const p of PROPORCOES_IA) {
+      const [a, b] = p.split(":").map(Number);
+      const d = Math.abs(Math.log(a / b) - alvo);
+      if (d < dif) { dif = d; melhor = p; }
+    }
+    return melhor;
+  }
+  // lista usada pela tela de criação (só os ativos, na ordem do admin)
+  const FORMATOS = [];
+  function aplicarFormatos(lista) {
+    const ativos = (lista && lista.length ? lista : FORMATOS_PADRAO)
+      .filter((f) => f.ativo !== false)
+      .sort((a, b) => (a.ordem || 0) - (b.ordem || 0))
+      .map((f) => ({ id: String(f.id), nome: f.nome, w: Number(f.largura), h: Number(f.altura), prop: proporcaoIA(f.largura, f.altura) }));
+    FORMATOS.splice(0, FORMATOS.length, ...(ativos.length ? ativos : aplicarFormatosPadrao()));
+  }
+  function aplicarFormatosPadrao() {
+    return FORMATOS_PADRAO.map((f) => ({ id: f.id, nome: f.nome, w: f.largura, h: f.altura, prop: proporcaoIA(f.largura, f.altura) }));
+  }
+  aplicarFormatos(FORMATOS_PADRAO);
 
   const PAPEIS_COR = {
     principal: "Principal",
@@ -224,6 +251,36 @@
     x.globalAlpha = 1;
     return c.toDataURL("image/jpeg", 0.85);
   }
+  // demonstração: "ajuste" = a mesma imagem com um leve tom da paleta
+  async function demoRefinar(base, cores, i) {
+    const img = await carregarImagem(`data:${base.mime || "image/jpeg"};base64,${base.data}`);
+    const c = document.createElement("canvas");
+    c.width = img.naturalWidth; c.height = img.naturalHeight;
+    const x = c.getContext("2d");
+    x.drawImage(img, 0, 0);
+    const pal = cores.length ? cores : [{ hex: "#EA0356" }];
+    x.globalCompositeOperation = "soft-light";
+    x.globalAlpha = 0.35;
+    x.fillStyle = pal[(i + 1) % pal.length].hex;
+    x.fillRect(0, 0, c.width, c.height);
+    return c.toDataURL("image/jpeg", 0.88);
+  }
+  // demonstração: "foto tratada" = a foto enquadrada na proporção, sobre a cor escolhida
+  async function demoFoto(foto, prop, cor) {
+    const img = await carregarImagem(`data:${foto.mime || "image/jpeg"};base64,${foto.data}`);
+    const [a, b] = String(prop || "1:1").split(":").map(Number);
+    const k = 900 / Math.max(a, b);
+    const c = document.createElement("canvas");
+    c.width = Math.round(a * k); c.height = Math.round(b * k);
+    const x = c.getContext("2d");
+    x.fillStyle = cor || "#F7F7F8";
+    x.fillRect(0, 0, c.width, c.height);
+    const esc = Math.max(c.width / img.naturalWidth, c.height / img.naturalHeight) * 0.92;
+    const w = img.naturalWidth * esc, h = img.naturalHeight * esc;
+    x.drawImage(img, (c.width - w) / 2, (c.height - h) / 2, w, h);
+    return c.toDataURL("image/jpeg", 0.9);
+  }
+
   function lum(hex) {
     const n = parseInt(hex.slice(1), 16);
     return (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
@@ -258,7 +315,8 @@
   // nomes no Supabase (prefixados para conviver com a Sof.ia no mesmo projeto)
   const T = {
     marca: "criadigi_marca", cores: "criadigi_cores", arquivos: "criadigi_arquivos",
-    estilos: "criadigi_estilos", geracoes: "criadigi_geracoes",
+    estilos: "criadigi_estilos", geracoes: "criadigi_geracoes", formatos: "criadigi_formatos",
+    templates: "criadigi_templates",
   };
   const B = { marca: "criadigi-marca", geracoes: "criadigi-geracoes" };
   const F = { gerar: "criadigi-gerar", usuarios: "criadigi-usuarios" };
@@ -374,22 +432,29 @@
     async marca() {
       if (DEMO) {
         const d = demo();
+        if (!d.formatos) { d.formatos = FORMATOS_PADRAO.map((f) => ({ ...f, id: uid() })); demoSalvar(); }
+        const formatos = [...d.formatos].sort((a, b) => a.ordem - b.ordem);
+        aplicarFormatos(formatos);
         return {
           marca: { ...d.marca },
           cores: [...d.cores].sort((a, b) => a.ordem - b.ordem),
           arquivos: d.arquivos.map((a) => ({ ...a })),
           estilos: [...d.estilos].sort((a, b) => a.ordem - b.ordem),
+          formatos,
         };
       }
-      const [m, c, a, e] = await Promise.all([
+      const [m, c, a, e, fm] = await Promise.all([
         sb.from(T.marca).select("*").eq("id", 1).single(),
         sb.from(T.cores).select("*").order("ordem"),
         sb.from(T.arquivos).select("*").order("criado_em"),
         sb.from(T.estilos).select("*").order("ordem"),
+        sb.from(T.formatos).select("*").order("ordem"),
       ]);
       for (const r of [m, c, a, e]) if (r.error) throw r.error;
+      const formatos = fm.error ? [] : fm.data;   // se a tabela ainda não existir, usa os padrões
+      aplicarFormatos(formatos);
       const arquivos = a.data.map((x) => ({ ...x, url: sb.storage.from(B.marca).getPublicUrl(x.caminho).data.publicUrl }));
-      return { marca: m.data, cores: c.data, arquivos, estilos: e.data };
+      return { marca: m.data, cores: c.data, arquivos, estilos: e.data, formatos };
     },
 
     async salvarMarca(patch) {
@@ -459,36 +524,124 @@
       if (error) throw error;
     },
 
+    async salvarFormato(f) {
+      if (DEMO) {
+        const d = demo();
+        if (f.id) Object.assign(d.formatos.find((x) => x.id === f.id) || {}, f);
+        else d.formatos.push({ ativo: true, ...f, id: uid() });
+        demoSalvar(); return;
+      }
+      const { error } = f.id
+        ? await sb.from(T.formatos).update(f).eq("id", f.id)
+        : await sb.from(T.formatos).insert(f);
+      if (error) throw error;
+    },
+
+    async apagarFormato(id) {
+      if (DEMO) { const d = demo(); d.formatos = d.formatos.filter((x) => x.id !== id); demoSalvar(); return; }
+      const { error } = await sb.from(T.formatos).delete().eq("id", id);
+      if (error) throw error;
+    },
+
     async apagarEstilo(id) {
       if (DEMO) { const d = demo(); d.estilos = d.estilos.filter((x) => x.id !== id); demoSalvar(); return; }
       const { error } = await sb.from(T.estilos).delete().eq("id", id);
       if (error) throw error;
     },
 
-    // params: { prompt, estilo_id, estilo_nome, proporcao, formato, quantidade, base }
+    // params (modo "criar"): { prompt, historico, estilo_id, estilo_nome, proporcao, formato, quantidade, base, base_tipo, fotos }
+    // params (modo "foto"):  { modo: "foto", foto, tratamento, cor, instrucao, proporcao }
     // resposta: { imagens: [{id, url}], erros, salvo, restante_hora }
     async gerar(params) {
       if (DEMO) {
         const d = demo();
         const s = demoSessao();
         const conta = s && emailPermitido(s.email, d.marca) ? s : null;
-        const restante = demoLimite(d.marca, conta, params.quantidade);
-        await espera(1200 + Math.random() * 800);
+        const qtd = params.modo === "foto" ? 1 : params.quantidade;
+        const restante = demoLimite(d.marca, conta, qtd);
+        await espera(1000 + Math.random() * 800);
         const imagens = [];
-        for (let i = 0; i < params.quantidade; i++) {
-          const url = demoImagem(params.proporcao, params.estilo_nome, hash(params.prompt + Date.now() + i), d.cores);
+        for (let i = 0; i < qtd; i++) {
+          let url;
+          if (params.modo === "foto") url = await demoFoto(params.foto, params.proporcao, params.cor);
+          else if (params.base && params.base_tipo === "refinar") url = await demoRefinar(params.base, d.cores, i);
+          else url = demoImagem(params.proporcao, params.estilo_nome, hash(params.prompt + Date.now() + i), d.cores);
           const id = uid();
-          if (conta) d.geracoes.unshift({ id, user_id: conta.id, url, prompt: params.prompt, formato: params.formato, estilo: params.estilo_nome, criado_em: new Date().toISOString() });
+          if (conta && params.modo !== "foto") d.geracoes.unshift({ id, user_id: conta.id, url, prompt: params.prompt, formato: params.formato, estilo: params.estilo_nome, criado_em: new Date().toISOString() });
           imagens.push({ id, url });
         }
         d.geracoes = d.geracoes.slice(0, 16);
         demoSalvar();
-        return { imagens, erros: [], salvo: !!conta, restante_hora: restante };
+        return { imagens, erros: [], salvo: !!conta && params.modo !== "foto", restante_hora: restante };
       }
       const { data, error } = await sb.functions.invoke(F.gerar, { body: { ...params, cliente: clienteId() } });
       if (error) throw new Error(await erroDaFuncao(error));
       if (data?.erro) throw new Error(data.erro);
       return data;
+    },
+
+    // ---------------------------------------------------------------- templates
+    async templates({ todos = false } = {}) {
+      if (DEMO) {
+        const lista = (demo().templates || []).map((t) => ({ ...t, campos: JSON.parse(JSON.stringify(t.campos || [])) }));
+        return lista.filter((t) => todos || t.ativo !== false).sort((a, b) => (a.ordem || 0) - (b.ordem || 0));
+      }
+      let q = sb.from(T.templates).select("*").order("ordem").order("criado_em");
+      if (!todos) q = q.eq("ativo", true);
+      const { data, error } = await q;
+      if (error) {
+        if (/does not exist|schema cache/i.test(error.message)) return [];   // tabela ainda não criada
+        throw error;
+      }
+      const url = (c) => (c ? sb.storage.from(B.marca).getPublicUrl(c).data.publicUrl : null);
+      return data.map((t) => ({ ...t, base_url: url(t.base_caminho), sobre_url: url(t.sobre_caminho) }));
+    },
+
+    // envia a arte de fundo ou a camada de cima; devolve { caminho, url }
+    async enviarArteTemplate(file) {
+      if (DEMO) return { caminho: "demo/" + file.name, url: await arquivoParaDataURL(file) };
+      const ext = (file.name.split(".").pop() || "png").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const caminho = `templates/${uid()}.${ext}`;
+      const up = await sb.storage.from(B.marca).upload(caminho, file, { contentType: file.type || "image/png", upsert: false });
+      if (up.error) throw up.error;
+      return { caminho, url: sb.storage.from(B.marca).getPublicUrl(caminho).data.publicUrl };
+    },
+
+    async salvarTemplate(t) {
+      const linha = {
+        nome: t.nome, categoria: t.categoria || "Geral", base_caminho: t.base_caminho, sobre_caminho: t.sobre_caminho || null,
+        largura: t.largura, altura: t.altura, campos: t.campos || [], ativo: t.ativo !== false, ordem: t.ordem || 0,
+      };
+      if (DEMO) {
+        const d = demo();
+        d.templates = d.templates || [];
+        const extra = { base_url: t.base_url, sobre_url: t.sobre_url || null };
+        if (t.id) { Object.assign(d.templates.find((x) => x.id === t.id) || {}, linha, extra); demoSalvar(); return t.id; }
+        const id = uid();
+        d.templates.push({ ...linha, ...extra, id, criado_em: new Date().toISOString() });
+        demoSalvar(); return id;
+      }
+      if (t.id) {
+        const { error } = await sb.from(T.templates).update(linha).eq("id", t.id);
+        if (error) throw error;
+        return t.id;
+      }
+      const { data, error } = await sb.from(T.templates).insert(linha).select("id").single();
+      if (error) throw error;
+      return data.id;
+    },
+
+    async apagarTemplate(t) {
+      if (DEMO) { const d = demo(); d.templates = (d.templates || []).filter((x) => x.id !== t.id); demoSalvar(); return; }
+      const arquivos = [t.base_caminho, t.sobre_caminho].filter(Boolean);
+      if (arquivos.length) await sb.storage.from(B.marca).remove(arquivos);
+      const { error } = await sb.from(T.templates).delete().eq("id", t.id);
+      if (error) throw error;
+    },
+
+    async removerArteTemplate(caminho) {
+      if (DEMO || !caminho) return;
+      await sb.storage.from(B.marca).remove([caminho]);
     },
 
     // artes salvas da conta conectada
@@ -790,7 +943,7 @@
   }
 
   window.CriaDigi = {
-    API, FORMATOS, PAPEIS_COR, MODELOS,
+    API, FORMATOS, PAPEIS_COR, MODELOS, proporcaoIA,
     esc, $, $$, uid, toast, espera,
     arquivoParaDataURL, carregarImagem, reduzirParaBase64, carregarFontes,
     montarCabecalho, telaLogin, lum, definirTema, abrirLogin, definirDominios,

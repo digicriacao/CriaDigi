@@ -5,7 +5,7 @@
   "use strict";
   const { API, PAPEIS_COR, MODELOS, esc, $, $$, toast, carregarFontes, montarCabecalho, telaLogin } = window.CriaDigi;
 
-  const S = { sessao: null, marca: {}, cores: [], arquivos: [], estilos: [], secao: "identidade" };
+  const S = { sessao: null, marca: {}, cores: [], arquivos: [], estilos: [], formatos: [], secao: "identidade" };
 
   async function iniciar() {
     S.sessao = await API.sessao().catch(() => null);
@@ -38,6 +38,7 @@
       Object.assign(S, await API.marca());
       carregarFontes(S.arquivos);
       contar();
+      API.templates({ todos: true }).then((l) => { S.templatesAdmin = l; contar(); }).catch(() => {});
     } catch (e) { toast("Erro ao carregar a marca: " + e.message, "erro", 8000); }
   }
 
@@ -48,11 +49,18 @@
       logos: S.arquivos.filter((a) => a.tipo === "logo").length,
       referencias: S.arquivos.filter((a) => a.tipo === "referencia").length,
       estilos: S.estilos.length,
+      formatos: (S.formatos || []).filter((f) => f.ativo !== false).length,
+      templates: S.templatesAdmin ? S.templatesAdmin.length : "",
     };
     $$("[data-cont]").forEach((el) => { el.textContent = n[el.dataset.cont] ?? ""; });
   }
 
   function irPara(sec) {
+    if (ED.t && ED.sujo && $("#tpl-admin-tela")) {
+      if (!confirm("Sair sem salvar as alterações do template?")) return;
+      if (ED.novo) API.removerArteTemplate(ED.t.base_caminho);
+    }
+    ED.t = null; ED.sujo = false;
     S.secao = sec;
     history.replaceState(null, "", "#" + sec);
     $$("#admin-menu [data-sec]").forEach((b) => b.classList.toggle("on", b.dataset.sec === sec));
@@ -312,6 +320,184 @@
     },
 
     // ---------------------------------------------------------------- usuários
+    // ---------------------------------------------------------------- templates
+    async templates(el) {
+      el.innerHTML = topo("Templates",
+        "Artes prontas com base fixa, como aniversários e comunicados. Você define quais textos o usuário pode editar e onde entra a foto da pessoa; o resto da arte não muda.",
+        `<label class="btn btn-primario"><input type="file" accept="image/png,image/jpeg,image/webp" hidden id="novo-template"> + Novo template</label>`)
+        + `<section class="cartao-admin">
+          <p class="ajuda">Para começar, envie a arte de fundo já no tamanho final (ex.: 1080×1350), sem os textos que vão mudar e com o espaço da foto livre.</p>
+          <div class="tpl-grade" id="lista-templates"><p class="ajuda">Carregando…</p></div>
+        </section>`;
+      const desenhar = () => {
+        const lista = S.templatesAdmin || [];
+        $("#lista-templates").innerHTML = lista.length ? lista.map((t) => `
+          <div class="tpl-cartao tpl-cartao-admin ${t.ativo === false ? "inativo" : ""}" data-id="${t.id}">
+            <span class="tpl-thumb" style="aspect-ratio:${t.largura} / ${t.altura}"><img src="${esc(t.base_url)}" alt=""></span>
+            <span class="tpl-nome">${esc(t.nome)}</span>
+            <span class="tpl-meta">${esc(t.categoria || "Geral")} · ${t.largura}×${t.altura} · ${(t.campos || []).length} campo(s)</span>
+            <span class="arq-acoes">
+              <button type="button" class="btn btn-sm btn-primario" data-t="editar">Editar</button>
+              <label class="interruptor"><input type="checkbox" data-t="ativo" ${t.ativo !== false ? "checked" : ""}> Ativo</label>
+              <button type="button" class="btn btn-sm btn-perigo" data-t="apagar">Apagar</button>
+            </span>
+          </div>`).join("") : `<p class="ajuda">Nenhum template cadastrado ainda.</p>`;
+        contar();
+      };
+      try { S.templatesAdmin = await API.templates({ todos: true }); } catch (e) { toast(e.message, "erro"); S.templatesAdmin = []; }
+      desenhar();
+
+      $("#novo-template").addEventListener("change", async (ev) => {
+        const file = ev.target.files[0];
+        ev.target.value = "";
+        if (!file) return;
+        try {
+          const dim = await dimensoes(file);
+          if (dim.w < 200 || dim.h < 200) return toast("A arte precisa ter pelo menos 200 px de cada lado.", "erro");
+          toast("Enviando a arte…", "info", 2000);
+          const { caminho, url } = await API.enviarArteTemplate(file);
+          abrirEditorTemplate({
+            id: null, nome: file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " "), categoria: "Geral",
+            base_caminho: caminho, base_url: url, sobre_caminho: null, sobre_url: null,
+            largura: dim.w, altura: dim.h, campos: [], ativo: true, ordem: (S.templatesAdmin.at(-1)?.ordem || 0) + 1,
+          }, true);
+        } catch (e) { toast(e.message, "erro", 7000); }
+      });
+
+      $("#lista-templates").addEventListener("change", async (ev) => {
+        if (ev.target.dataset.t !== "ativo") return;
+        const t = S.templatesAdmin.find((x) => x.id === ev.target.closest("[data-id]").dataset.id);
+        const valor = ev.target.checked;
+        if (await salvarComAviso(() => API.salvarTemplate({ ...t, ativo: valor }), valor ? "Template ativado." : "Template desativado.")) { t.ativo = valor; desenhar(); }
+      });
+      $("#lista-templates").addEventListener("click", async (ev) => {
+        const b = ev.target.closest("button[data-t]");
+        if (!b) return;
+        const t = S.templatesAdmin.find((x) => x.id === b.closest("[data-id]").dataset.id);
+        if (b.dataset.t === "editar") abrirEditorTemplate(JSON.parse(JSON.stringify(t)), false);
+        if (b.dataset.t === "apagar") {
+          if (!confirm(`Apagar o template "${t.nome}"? Não dá para desfazer.`)) return;
+          if (await salvarComAviso(() => API.apagarTemplate(t), "Template apagado.")) {
+            S.templatesAdmin = S.templatesAdmin.filter((x) => x.id !== t.id); desenhar();
+          }
+        }
+      });
+    },
+
+    // ---------------------------------------------------------------- formatos
+    formatos(el) {
+      const SUGESTOES = [
+        ["Thumbnail YouTube", 1280, 720], ["Post X / Twitter", 1600, 900], ["Pinterest", 1000, 1500],
+        ["Banner de site", 1920, 600], ["Capa LinkedIn", 1584, 396], ["Tela de TV", 3840, 2160],
+      ];
+      el.innerHTML = topo("Formatos",
+        "Os tamanhos que aparecem na lateral da criação e no editor. O primeiro da lista já vem marcado para o usuário.",
+        `<button class="btn btn-primario" type="button" id="novo-formato">+ Novo formato</button>`)
+        + `<section class="cartao-admin">
+          <div class="lista-formatos-admin" id="lista-formatos"></div>
+          <p class="ajuda" style="margin-top:14px">A IA só gera em algumas proporções fixas, então cada formato usa a mais próxima (coluna "IA gera em") e o editor recorta no tamanho exato em pixels.</p>
+        </section>
+        <section class="cartao-admin">
+          <h2>Sugestões</h2>
+          <p class="ajuda">Clique para adicionar.</p>
+          <div class="chips" id="sugestoes-formato">${SUGESTOES.map(([n, w, h]) => `<button type="button" class="chip" data-w="${w}" data-h="${h}" data-n="${esc(n)}">${esc(n)} · ${w}×${h}</button>`).join("")}</div>
+        </section>
+        <section class="cartao-admin">
+          <h2>Como aparece para o usuário</h2>
+          <div class="formatos previa-formatos" id="previa-formatos"></div>
+        </section>`;
+
+      const ordenados = () => [...S.formatos].sort((a, b) => (a.ordem || 0) - (b.ordem || 0));
+      const forma = (w, h, max = 26) => { const k = max / Math.max(w, h); return `width:${Math.max(6, Math.round(w * k))}px;height:${Math.max(6, Math.round(h * k))}px`; };
+      const desenhar = () => {
+        const lista = ordenados();
+        $("#lista-formatos").innerHTML = lista.length ? `
+          <div class="linha-formato cabecalho" aria-hidden="true"><span></span><span>Nome</span><span>Largura</span><span>Altura</span><span>IA gera em</span><span>Ativo</span><span></span></div>
+          ${lista.map((f, i) => `
+          <div class="linha-formato ${f.ativo === false ? "inativo" : ""}" data-id="${f.id}">
+            <span class="ordem-botoes">
+              <button type="button" class="icone mini" data-mover="-1" ${i === 0 ? "disabled" : ""} aria-label="Subir">↑</button>
+              <button type="button" class="icone mini" data-mover="1" ${i === lista.length - 1 ? "disabled" : ""} aria-label="Descer">↓</button>
+            </span>
+            <span class="nome-formato"><span class="forma" style="${forma(f.largura, f.altura)}"></span><input type="text" data-campo="nome" value="${esc(f.nome)}" aria-label="Nome"></span>
+            <input type="number" data-campo="largura" min="16" max="8000" value="${f.largura}" aria-label="Largura em pixels">
+            <input type="number" data-campo="altura" min="16" max="8000" value="${f.altura}" aria-label="Altura em pixels">
+            <span class="etiqueta">${window.CriaDigi.proporcaoIA(f.largura, f.altura)}</span>
+            <label class="interruptor"><input type="checkbox" data-campo="ativo" ${f.ativo !== false ? "checked" : ""} aria-label="Ativo"></label>
+            <button type="button" class="icone" data-apagar title="Apagar formato" aria-label="Apagar formato">
+              <svg viewBox="0 0 24 24" width="16" height="16"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+            </button>
+          </div>`).join("")}` : `<p class="ajuda">Nenhum formato. Sem formatos cadastrados, a criação usa a lista padrão.</p>`;
+        const ativos = lista.filter((f) => f.ativo !== false);
+        $("#previa-formatos").innerHTML = ativos.map((f, i) => `
+          <div class="formato ${i === 0 ? "on" : ""}">
+            <span class="forma" style="${forma(f.largura, f.altura)}"></span>
+            <span class="formato-nome">${esc(f.nome)}</span>
+            <span class="formato-px">${f.largura}×${f.altura}</span>
+          </div>`).join("") || `<p class="ajuda">Nenhum formato ativo.</p>`;
+        contar();
+      };
+      desenhar();
+
+      const recarregarFormatos = async () => { S.formatos = (await API.marca()).formatos; desenhar(); };
+      const lista = $("#lista-formatos");
+
+      lista.addEventListener("change", async (ev) => {
+        const campo = ev.target.dataset.campo;
+        if (!campo) return;
+        const linha = ev.target.closest(".linha-formato");
+        const f = S.formatos.find((x) => String(x.id) === linha.dataset.id);
+        let valor = ev.target.type === "checkbox" ? ev.target.checked : ev.target.value.trim();
+        if (campo === "largura" || campo === "altura") {
+          valor = Math.round(Number(valor));
+          if (!(valor >= 16 && valor <= 8000)) { toast("Use um tamanho entre 16 e 8000 pixels.", "erro"); ev.target.value = f[campo]; return; }
+        }
+        if (campo === "nome" && !valor) { ev.target.value = f.nome; return; }
+        if (campo === "ativo" && !valor && S.formatos.filter((x) => x.ativo !== false).length <= 1) {
+          toast("Deixe pelo menos um formato ativo.", "erro"); ev.target.checked = true; return;
+        }
+        if (await salvarComAviso(() => API.salvarFormato({ id: f.id, [campo]: valor }), "Formato salvo.")) { f[campo] = valor; desenhar(); }
+      });
+
+      lista.addEventListener("click", async (ev) => {
+        const linha = ev.target.closest(".linha-formato");
+        if (!linha || linha.classList.contains("cabecalho")) return;
+        const ord = ordenados();
+        const i = ord.findIndex((x) => String(x.id) === linha.dataset.id);
+        const mover = ev.target.closest("[data-mover]");
+        if (mover) {
+          const j = i + Number(mover.dataset.mover);
+          if (j < 0 || j >= ord.length) return;
+          [ord[i], ord[j]] = [ord[j], ord[i]];
+          try {
+            await Promise.all(ord.map((f, k) => (f.ordem === k + 1 ? null : API.salvarFormato({ id: f.id, ordem: k + 1 }))).filter(Boolean));
+            ord.forEach((f, k) => { f.ordem = k + 1; });
+            desenhar();
+          } catch (e) { toast(e.message, "erro"); }
+          return;
+        }
+        if (ev.target.closest("[data-apagar]")) {
+          const f = ord[i];
+          if (S.formatos.length <= 1) return toast("Deixe pelo menos um formato.", "erro");
+          if (!confirm(`Apagar o formato "${f.nome}"?`)) return;
+          if (await salvarComAviso(() => API.apagarFormato(f.id), "Formato apagado.")) { S.formatos = S.formatos.filter((x) => x.id !== f.id); desenhar(); }
+        }
+      });
+
+      const adicionar = async (nome, largura, altura) => {
+        const ordem = (ordenados().at(-1)?.ordem || 0) + 1;
+        if (await salvarComAviso(() => API.salvarFormato({ nome, largura, altura, ordem, ativo: true }), `Formato "${nome}" criado.`)) {
+          await recarregarFormatos();
+          const ult = $$('.linha-formato [data-campo="nome"]').at(-1); if (ult) { ult.focus(); ult.select(); }
+        }
+      };
+      $("#novo-formato").addEventListener("click", () => adicionar("Novo formato", 1080, 1080));
+      $("#sugestoes-formato").addEventListener("click", (ev) => {
+        const b = ev.target.closest("[data-w]");
+        if (b) adicionar(b.dataset.n, Number(b.dataset.w), Number(b.dataset.h));
+      });
+    },
+
     async usuarios(el) {
       el.innerHTML = topo("Contas",
         "Qualquer pessoa usa a CriaDigi sem login; quem cria conta tem as artes salvas e um limite maior. Aqui você vê as contas, define quem é admin, troca senhas e remove acessos.")
@@ -461,6 +647,358 @@
       });
     },
   };
+
+  // ================================================================ editor de template
+  function dimensoes(file) {
+    return new Promise((res, rej) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => { res({ w: img.naturalWidth, h: img.naturalHeight }); URL.revokeObjectURL(url); };
+      img.onerror = () => { rej(new Error("Não consegui ler a imagem.")); URL.revokeObjectURL(url); };
+      img.src = url;
+    });
+  }
+
+  const ED = { t: null, imgs: null, sel: null, sujo: false, novo: false, teste: null, caixas: {} };
+  const pct = (v) => Math.round(v * 1000) / 10;
+
+  function fontesMarca() {
+    const n = [...new Set(S.arquivos.filter((a) => a.tipo === "fonte" && a.ativo !== false).map((a) => a.nome))];
+    if (!n.includes("Hanken Grotesk")) n.push("Hanken Grotesk");
+    return n;
+  }
+  function fonteDoPapel(papel) {
+    const f = S.arquivos.find((a) => a.tipo === "fonte" && a.ativo !== false && a.variante === papel) || S.arquivos.find((a) => a.tipo === "fonte" && a.ativo !== false);
+    return f ? f.nome : "Hanken Grotesk";
+  }
+  function corDoPapel(papel, alt) { const c = S.cores.find((x) => x.papel === papel); return c ? c.hex : alt; }
+
+  async function abrirEditorTemplate(t, novo) {
+    ED.t = t; ED.novo = novo; ED.sujo = novo; ED.sel = null; ED.teste = null;
+    const el = $("#admin-conteudo");
+    el.innerHTML = `
+      <div class="secao-topo">
+        <div><button type="button" class="btn btn-sm btn-ghost" id="tpl-sair">← Templates</button></div>
+        <div class="linha-botoes" style="margin:0">
+          <span class="ajuda" id="tpl-status" style="margin:0"></span>
+          <button type="button" class="btn btn-primario" id="tpl-salvar">Salvar template</button>
+        </div>
+      </div>
+      <div class="tpl-editor">
+        <div class="tpl-editor-tela">
+          <div class="tela-wrap"><canvas id="tpl-admin-tela"></canvas></div>
+          <p class="dica-editor">Clique em um campo para selecionar. Arraste para mover; puxe o quadradinho rosa para mudar o tamanho.</p>
+        </div>
+        <aside class="tpl-editor-painel">
+          <section class="cartao-admin">
+            <label class="campo"><span class="rotulo">Nome do template</span><input type="text" id="tpl-nome" value="${esc(t.nome)}"></label>
+            <label class="campo" style="margin-top:12px"><span class="rotulo">Categoria</span>
+              <input type="text" id="tpl-categoria" value="${esc(t.categoria || "Geral")}" list="tpl-cats" placeholder="Ex.: Aniversário, Comunicado">
+              <datalist id="tpl-cats">${[...new Set((S.templatesAdmin || []).map((x) => x.categoria).filter(Boolean).concat(["Aniversário", "Comunicado", "Boas-vindas"]))].map((c) => `<option value="${esc(c)}">`).join("")}</datalist></label>
+            <p class="ajuda" style="margin:12px 0 0">Arte: ${t.largura} × ${t.altura} px.</p>
+            <div class="linha-botoes">
+              <label class="btn btn-sm btn-ghost"><input type="file" accept="image/png,image/jpeg,image/webp" hidden id="tpl-trocar-base">Trocar arte de fundo</label>
+              <label class="btn btn-sm btn-ghost"><input type="file" accept="image/png,image/webp" hidden id="tpl-sobre">${t.sobre_url ? "Trocar camada de cima" : "+ Camada por cima da foto"}</label>
+              ${t.sobre_url ? `<button type="button" class="btn btn-sm btn-perigo" id="tpl-sobre-remover">Remover camada de cima</button>` : ""}
+            </div>
+            <p class="ajuda ajuda-mini">Camada de cima (opcional): um PNG transparente do mesmo tamanho, como uma moldura que fica por cima da foto.</p>
+          </section>
+
+          <section class="cartao-admin">
+            <h2>Campos</h2>
+            <div class="linha-botoes" style="margin-top:8px">
+              <button type="button" class="btn btn-sm btn-ghost" id="tpl-add-texto">+ Texto editável</button>
+              <button type="button" class="btn btn-sm btn-ghost" id="tpl-add-foto">+ Área de foto</button>
+            </div>
+            <div class="camadas" id="tpl-campos"></div>
+            <div id="tpl-props"></div>
+          </section>
+
+          <section class="cartao-admin">
+            <h2>Testar</h2>
+            <p class="ajuda">Veja como fica com uma foto de exemplo (não é salva).</p>
+            <label class="btn btn-sm btn-ghost"><input type="file" accept="image/*" hidden id="tpl-teste">Escolher foto de teste</label>
+          </section>
+        </aside>
+      </div>`;
+    try {
+      ED.imgs = await window.CriaDigiModelo.carregar(t);
+    } catch (e) { toast("Não consegui abrir a arte: " + e.message, "erro"); return irPara("templates"); }
+    const cv = $("#tpl-admin-tela");
+    cv.width = t.largura; cv.height = t.altura;
+    ligarEditorTemplate();
+    listaCampos(); propsCampo(); desenharEd(); status();
+  }
+
+  function status() {
+    const s = $("#tpl-status");
+    if (s) s.textContent = ED.sujo ? (ED.novo ? "Ainda não salvo" : "Alterações não salvas") : "Tudo salvo";
+  }
+  function mudou() { ED.sujo = true; status(); }
+
+  function desenharEd() {
+    const cv = $("#tpl-admin-tela");
+    if (!cv || !ED.imgs) return;
+    const estado = { textos: {}, fotos: {} };
+    if (ED.teste) (ED.t.campos || []).filter((c) => c.tipo === "foto").forEach((c) => { estado.fotos[c.id] = { img: ED.teste, zoom: 1, dx: 0, dy: 0 }; });
+    ED.caixas = window.CriaDigiModelo.desenhar(cv.getContext("2d"), ED.t, ED.imgs, estado, { vagas: true, caixas: true, sel: ED.sel, alca: true });
+  }
+
+  function listaCampos() {
+    const campos = ED.t.campos || [];
+    $("#tpl-campos").innerHTML = campos.length ? campos.map((c) => `
+      <button type="button" class="camada ${ED.sel === c.id ? "on" : ""}" data-campo-id="${c.id}">
+        <span class="etiqueta ${c.tipo === "foto" ? "rosa" : ""}">${c.tipo === "foto" ? "Foto" : "Texto"}</span> ${esc(c.rotulo || "")}
+      </button>`).join("") : `<p class="ajuda">Adicione os textos que o usuário vai poder trocar e a área onde entra a foto.</p>`;
+  }
+
+  function campoSel() { return (ED.t.campos || []).find((c) => c.id === ED.sel) || null; }
+
+  function swatchesAdmin(atual, attr) {
+    return `<div class="paleta">${S.cores.map((c) => `<button type="button" class="amostra ${String(atual || "").toUpperCase() === c.hex.toUpperCase() ? "on" : ""}" ${attr}="${c.hex}" style="--c:${c.hex}" title="${esc(c.nome)}" aria-label="${esc(c.nome)}"></button>`).join("")}
+      <input type="color" ${attr}-livre value="${esc(atual || "#222323")}" title="Outra cor" aria-label="Outra cor" class="cor-livre"></div>`;
+  }
+
+  function propsCampo() {
+    const c = campoSel();
+    const box = $("#tpl-props");
+    if (!c) { box.innerHTML = ""; return; }
+    const num = (k, v, min, max, passo = 0.1) => `<input type="number" data-p="${k}" value="${v}" min="${min}" max="${max}" step="${passo}">`;
+    if (c.tipo === "texto") {
+      box.innerHTML = `
+        <div class="props-campo">
+          <label class="campo"><span class="rotulo">Nome do campo (o usuário vê)</span><input type="text" data-p="rotulo" value="${esc(c.rotulo)}"></label>
+          <label class="campo"><span class="rotulo">Texto padrão</span><textarea data-p="padrao" rows="2">${esc(c.padrao)}</textarea></label>
+          <div class="duas-col" style="margin:0">
+            <label class="campo"><span class="rotulo">Fonte</span><select data-p="fonte">${fontesMarca().map((f) => `<option ${f === c.fonte ? "selected" : ""}>${esc(f)}</option>`).join("")}</select></label>
+            <label class="campo"><span class="rotulo">Peso</span><select data-p="peso">${[[400, "Regular"], [500, "Médio"], [600, "Semibold"], [700, "Bold"], [800, "Extra bold"], [900, "Black"]].map(([v, n]) => `<option value="${v}" ${Number(c.peso) === v ? "selected" : ""}>${n}</option>`).join("")}</select></label>
+          </div>
+          <label class="deslizador">Tamanho da letra <output>${Number(c.tamanho).toFixed(1)}</output><input type="range" data-p="tamanho" min="1" max="20" step="0.1" value="${c.tamanho}"></label>
+          <div class="duas-col" style="margin:0">
+            <label class="campo"><span class="rotulo">Linhas no máximo</span>${num("linhas_max", c.linhas_max, 1, 8, 1)}</label>
+            <label class="campo checar"><input type="checkbox" data-p="caixa_alta" ${c.caixa_alta ? "checked" : ""}> Caixa alta</label>
+          </div>
+          <p class="ajuda ajuda-mini">Se o usuário escrever demais, a letra diminui sozinha para caber.</p>
+          <span class="rotulo">Cor</span>${swatchesAdmin(c.cor, "data-cor")}
+          <span class="rotulo">Alinhamento</span>
+          <div class="segmentado segmentado-sm">${[["left", "Esq."], ["center", "Centro"], ["right", "Dir."]].map(([v, n]) => `<button type="button" data-alinhar="${v}" class="${c.alinhar === v ? "on" : ""}">${n}</button>`).join("")}</div>
+          <span class="rotulo">Posição e largura (% da arte)</span>
+          <div class="tres-col"><label>X ${num("x", pct(c.x), -20, 100)}</label><label>Y ${num("y", pct(c.y), -20, 100)}</label><label>Largura ${num("largura", pct(c.largura), 5, 100)}</label></div>
+          <button type="button" class="btn btn-sm btn-perigo" id="tpl-remover-campo" style="margin-top:14px">Remover campo</button>
+        </div>`;
+    } else {
+      box.innerHTML = `
+        <div class="props-campo">
+          <label class="campo"><span class="rotulo">Nome do campo (o usuário vê)</span><input type="text" data-p="rotulo" value="${esc(c.rotulo)}"></label>
+          <span class="rotulo">Forma</span>
+          <div class="segmentado segmentado-sm">${[["retangulo", "Retângulo"], ["arredondado", "Arredondado"], ["circulo", "Círculo"]].map(([v, n]) => `<button type="button" data-forma="${v}" class="${c.forma === v ? "on" : ""}">${n}</button>`).join("")}</div>
+          <label class="campo" style="margin-top:14px"><span class="rotulo">O que a IA faz com a foto</span>
+            <select data-p="ia">
+              <option value="nenhum" ${c.ia === "nenhum" ? "selected" : ""}>Nada: usa a foto como veio</option>
+              <option value="retrato" ${c.ia === "retrato" ? "selected" : ""}>Retrato profissional com fundo liso</option>
+              <option value="fundo" ${c.ia === "fundo" ? "selected" : ""}>Só troca o fundo da foto</option>
+              <option value="personalizado" ${c.ia === "personalizado" ? "selected" : ""}>Instrução personalizada</option>
+            </select></label>
+          ${c.ia === "retrato" || c.ia === "fundo" ? `<span class="rotulo">Cor do fundo</span>${swatchesAdmin(c.ia_cor, "data-iacor")}` : ""}
+          ${c.ia === "personalizado" ? `<label class="campo" style="margin-top:12px"><span class="rotulo">Instrução para a IA</span><textarea data-p="ia_instrucao" rows="3" placeholder="Ex.: retrato de busto sorrindo, fundo rosa #EA0356, luz suave">${esc(c.ia_instrucao || "")}</textarea></label>` : ""}
+          <p class="ajuda ajuda-mini">A IA sempre preserva o rosto da pessoa. O usuário pode voltar para a foto original se preferir.</p>
+          <span class="rotulo">Posição e tamanho (% da arte)</span>
+          <div class="tres-col"><label>X ${num("x", pct(c.x), -20, 100)}</label><label>Y ${num("y", pct(c.y), -20, 100)}</label><label>Largura ${num("w", pct(c.w), 2, 100)}</label><label>Altura ${num("h", pct(c.h), 2, 100)}</label></div>
+          <button type="button" class="btn btn-sm btn-perigo" id="tpl-remover-campo" style="margin-top:14px">Remover campo</button>
+        </div>`;
+    }
+  }
+
+  // círculo: mesma medida em pixels na largura e na altura
+  function ajustarCirculo(c, base = "w") {
+    if (c.forma !== "circulo") return;
+    const W = ED.t.largura, H = ED.t.altura;
+    if (base === "w") c.h = c.w * W / H; else c.w = c.h * H / W;
+  }
+
+  function ligarEditorTemplate() {
+    const t = ED.t;
+    $("#tpl-sair").addEventListener("click", () => {
+      if (ED.sujo && !confirm("Sair sem salvar as alterações do template?")) return;
+      if (ED.novo && ED.sujo) API.removerArteTemplate(t.base_caminho);
+      irPara("templates");
+    });
+    $("#tpl-salvar").addEventListener("click", async () => {
+      t.nome = $("#tpl-nome").value.trim() || "Template";
+      t.categoria = $("#tpl-categoria").value.trim() || "Geral";
+      if (!(t.campos || []).length && !confirm("Este template não tem nenhum campo editável. Salvar mesmo assim?")) return;
+      const btn = $("#tpl-salvar"); btn.disabled = true;
+      try {
+        t.id = await API.salvarTemplate(t);
+        ED.novo = false; ED.sujo = false; status();
+        S.templatesAdmin = await API.templates({ todos: true });
+        contar();
+        toast("Template salvo. Ele já aparece para os usuários.", "ok");
+      } catch (e) { toast(e.message, "erro", 7000); }
+      btn.disabled = false;
+    });
+    $("#tpl-nome").addEventListener("input", mudou);
+    $("#tpl-categoria").addEventListener("input", mudou);
+
+    $("#tpl-trocar-base").addEventListener("change", async (ev) => {
+      const file = ev.target.files[0]; ev.target.value = "";
+      if (!file) return;
+      try {
+        const dim = await dimensoes(file);
+        if ((dim.w !== t.largura || dim.h !== t.altura) && !confirm(`A nova arte tem ${dim.w}×${dim.h} px (a atual tem ${t.largura}×${t.altura}). Os campos mantêm a posição proporcional. Continuar?`)) return;
+        const antigo = t.base_caminho;
+        const { caminho, url } = await API.enviarArteTemplate(file);
+        Object.assign(t, { base_caminho: caminho, base_url: url, largura: dim.w, altura: dim.h });
+        if (!ED.novo) await API.salvarTemplate(t); else mudou();
+        if (antigo && antigo !== caminho) API.removerArteTemplate(antigo);
+        abrirEditorTemplate(t, ED.novo);
+      } catch (e) { toast(e.message, "erro"); }
+    });
+    $("#tpl-sobre").addEventListener("change", async (ev) => {
+      const file = ev.target.files[0]; ev.target.value = "";
+      if (!file) return;
+      try {
+        const dim = await dimensoes(file);
+        if (Math.abs(dim.w / dim.h - t.largura / t.altura) > 0.01) toast("A camada de cima tem proporção diferente da arte; ela será esticada para caber.", "aviso", 6000);
+        const antigo = t.sobre_caminho;
+        const { caminho, url } = await API.enviarArteTemplate(file);
+        Object.assign(t, { sobre_caminho: caminho, sobre_url: url });
+        if (!ED.novo) await API.salvarTemplate(t); else mudou();
+        if (antigo) API.removerArteTemplate(antigo);
+        abrirEditorTemplate(t, ED.novo);
+      } catch (e) { toast(e.message, "erro"); }
+    });
+    const rem = $("#tpl-sobre-remover");
+    if (rem) rem.addEventListener("click", async () => {
+      const antigo = t.sobre_caminho;
+      Object.assign(t, { sobre_caminho: null, sobre_url: null });
+      if (!ED.novo) await API.salvarTemplate(t); else mudou();
+      if (antigo) API.removerArteTemplate(antigo);
+      abrirEditorTemplate(t, ED.novo);
+    });
+
+    $("#tpl-add-texto").addEventListener("click", () => {
+      const n = (t.campos || []).filter((c) => c.tipo === "texto").length;
+      const c = {
+        id: window.CriaDigi.uid(), tipo: "texto", rotulo: n ? `Texto ${n + 1}` : "Nome", padrao: n ? "Escreva aqui" : "Nome da pessoa",
+        x: 0.1, y: Math.min(0.85, 0.7 + n * 0.08), largura: 0.8, linhas_max: 1, fonte: fonteDoPapel(n ? "texto" : "titulo"),
+        peso: n ? 500 : 800, tamanho: n ? 4 : 7, cor: corDoPapel("texto", "#222323"), alinhar: "center", caixa_alta: false,
+      };
+      t.campos = [...(t.campos || []), c]; ED.sel = c.id;
+      mudou(); listaCampos(); propsCampo(); desenharEd();
+    });
+    $("#tpl-add-foto").addEventListener("click", () => {
+      const c = {
+        id: window.CriaDigi.uid(), tipo: "foto", rotulo: "Foto da pessoa", x: 0.3, y: 0.15, w: 0.4, h: 0.4,
+        forma: "circulo", ia: "retrato", ia_cor: corDoPapel("fundo", "#F7F7F8"), ia_instrucao: "",
+      };
+      ajustarCirculo(c);
+      t.campos = [...(t.campos || []), c]; ED.sel = c.id;
+      mudou(); listaCampos(); propsCampo(); desenharEd();
+    });
+    $("#tpl-campos").addEventListener("click", (ev) => {
+      const b = ev.target.closest("[data-campo-id]");
+      if (!b) return;
+      ED.sel = b.dataset.campoId; listaCampos(); propsCampo(); desenharEd();
+    });
+
+    // propriedades do campo selecionado
+    const props = $("#tpl-props");
+    const aplicarProp = (alvo, final) => {
+      const c = campoSel();
+      if (!c) return;
+      const k = alvo.dataset.p;
+      let v = alvo.type === "checkbox" ? alvo.checked : alvo.value;
+      if (["x", "y", "largura", "w", "h"].includes(k)) { v = Number(v) / 100; if (!Number.isFinite(v)) return; }
+      if (["tamanho", "linhas_max", "peso"].includes(k)) { v = Number(v); if (!Number.isFinite(v)) return; }
+      if (k === "linhas_max") v = Math.max(1, Math.min(8, Math.round(v)));
+      c[k] = v;
+      if (k === "w") ajustarCirculo(c, "w");
+      if (k === "h") ajustarCirculo(c, "h");
+      if (k === "tamanho") alvo.previousElementSibling.value = Number(v).toFixed(1);
+      if (k === "rotulo") listaCampos();
+      if (k === "ia" || ((k === "w" || k === "h") && c.forma === "circulo")) { if (final) propsCampo(); }
+      mudou(); desenharEd();
+    };
+    props.addEventListener("input", (ev) => { if (ev.target.dataset.p) aplicarProp(ev.target, false); });
+    props.addEventListener("change", (ev) => {
+      if (ev.target.dataset.p) aplicarProp(ev.target, true);
+      const c = campoSel();
+      if (c && ev.target.hasAttribute("data-cor-livre")) { c.cor = ev.target.value.toUpperCase(); mudou(); propsCampo(); desenharEd(); }
+      if (c && ev.target.hasAttribute("data-iacor-livre")) { c.ia_cor = ev.target.value.toUpperCase(); mudou(); propsCampo(); }
+    });
+    props.addEventListener("click", (ev) => {
+      const c = campoSel();
+      if (!c) return;
+      const b = ev.target.closest("button");
+      if (!b) return;
+      if (b.dataset.cor) c.cor = b.dataset.cor;
+      else if (b.dataset.iacor) c.ia_cor = b.dataset.iacor;
+      else if (b.dataset.alinhar) c.alinhar = b.dataset.alinhar;
+      else if (b.dataset.forma) { c.forma = b.dataset.forma; ajustarCirculo(c); }
+      else if (b.id === "tpl-remover-campo") {
+        t.campos = t.campos.filter((x) => x.id !== c.id); ED.sel = null; listaCampos();
+      } else return;
+      mudou(); propsCampo(); desenharEd();
+    });
+
+    $("#tpl-teste").addEventListener("change", async (ev) => {
+      const f = ev.target.files[0]; ev.target.value = "";
+      if (!f) return;
+      ED.teste = await window.CriaDigi.carregarImagem(await window.CriaDigi.arquivoParaDataURL(f));
+      desenharEd();
+    });
+
+    // canvas: selecionar, mover e redimensionar
+    const cv = $("#tpl-admin-tela");
+    let arr = null;
+    const ponto = (ev) => { const r = cv.getBoundingClientRect(); return { x: (ev.clientX - r.left) * cv.width / r.width, y: (ev.clientY - r.top) * cv.height / r.height, k: cv.width / r.width }; };
+    const acertar = (p) => {
+      const sel = ED.caixas[ED.sel];
+      if (sel && sel.alca && Math.hypot(p.x - sel.alca.x, p.y - sel.alca.y) < Math.max(sel.alca.r, 18 * p.k)) return { id: ED.sel, alca: true };
+      const campos = [...(t.campos || [])].reverse();
+      const ordem = [...campos.filter((c) => c.tipo === "texto"), ...campos.filter((c) => c.tipo === "foto")];
+      const c = ordem.find((x) => { const k = ED.caixas[x.id]; return k && p.x >= k.x0 && p.x <= k.x1 && p.y >= k.y0 && p.y <= k.y1; });
+      return c ? { id: c.id, alca: false } : null;
+    };
+    cv.addEventListener("pointerdown", (ev) => {
+      const p = ponto(ev);
+      const hit = acertar(p);
+      ED.sel = hit ? hit.id : null;
+      listaCampos(); propsCampo(); desenharEd();
+      if (!hit) return;
+      const c = campoSel();
+      arr = { c, alca: hit.alca, px: p.x, py: p.y, ini: { ...c } };
+      cv.setPointerCapture(ev.pointerId);
+    });
+    cv.addEventListener("pointermove", (ev) => {
+      const p = ponto(ev);
+      if (!arr) {
+        const hit = acertar(p);
+        cv.style.cursor = hit ? (hit.alca ? "nwse-resize" : "move") : "default";
+        return;
+      }
+      const W = cv.width, H = cv.height, c = arr.c, i = arr.ini;
+      const dx = (p.x - arr.px) / W, dy = (p.y - arr.py) / H;
+      if (arr.alca) {
+        if (c.tipo === "foto") {
+          c.w = Math.max(0.02, i.w + dx);
+          c.h = Math.max(0.02, i.h + dy);
+          ajustarCirculo(c, "w");
+        } else {
+          c.largura = Math.max(0.05, i.largura + dx);
+        }
+      } else {
+        c.x = Math.max(-0.2, Math.min(1, i.x + dx));
+        c.y = Math.max(-0.2, Math.min(1, i.y + dy));
+      }
+      arr.moveu = true;
+      desenharEd();
+    });
+    const soltar = () => { if (arr && arr.moveu) { mudou(); propsCampo(); } arr = null; };
+    cv.addEventListener("pointerup", soltar);
+    cv.addEventListener("pointercancel", soltar);
+  }
 
   // ================================================================ arquivos (genérico)
   function secaoArquivos(el, o) {

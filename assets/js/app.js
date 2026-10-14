@@ -1,32 +1,34 @@
 /* =====================================================================
    CriaDigi · página de criação
+   Esquerda: chat com a IA. Centro: resultados, templates, minhas criações
+   e editor. Direita: opções da criação (ou ferramentas, ou campos do template).
    ===================================================================== */
 (function () {
   "use strict";
   const { API, FORMATOS, esc, $, $$, toast, carregarImagem, reduzirParaBase64,
-    carregarFontes, arquivoParaDataURL, montarCabecalho, lum, abrirLogin, definirDominios } = window.CriaDigi;
+    carregarFontes, arquivoParaDataURL, montarCabecalho, lum, abrirLogin, definirDominios, uid } = window.CriaDigi;
   const { Editor, POSICOES } = window.CriaDigiEditor;
+  const Modelo = window.CriaDigiModelo;
 
-  const IDEIAS = [
-    "Equipe comemorando a meta batida em um escritório moderno",
-    "Troféu sobre uma mesa com confetes nas cores da marca",
-    "Pessoa sorrindo ao receber um prêmio em um evento corporativo",
-    "Fundo abstrato para anúncio de campanha de incentivo",
-  ];
+  const MAX_FOTOS = 4;
 
   const S = {
     sessao: null,            // pessoa conectada (ou null)
     conta: false,            // true se a conta salva artes (e-mail de domínio permitido)
     marca: null, cores: [], arquivos: [], estilos: [],
     estilo: null,
-    formato: FORMATOS[1],
+    formato: null,
     quantidade: 2,
-    base: null,              // dataURL da imagem de base
+    base: null,              // dataURL da imagem de partida (opcional)
+    fotos: [],               // fotos de pessoas: [{ id, url }]
+    historico: [],           // pedidos já feitos nesta conversa
+    foco: null,              // imagem que o próximo pedido vai ajustar
     resultados: [],          // {id, url, formato, prompt}
     aberto: null,            // item aberto no editor
     gerando: false,
     exp: { tipo: "image/png", qualidade: 0.9 },
     trava: true,
+    templates: null, categoria: "Todas", tpl: null,
   };
 
   let ed = null;
@@ -48,25 +50,97 @@
     S.conta = !!S.sessao && API.emailPermitido(S.sessao.email, S.marca);
     atualizarAvisoConta();
     S.estilo = S.estilos.filter((e) => e.ativo !== false)[0] || null;
+    S.formato = FORMATOS[0];   // o primeiro formato da lista do admin já vem marcado
 
     ed = new Editor($("#tela"), { aoMudar: sincronizarFerramentas, aoSelecionar: aoSelecionar });
-    carregarFontes(S.arquivos).then(() => ed && ed.sujarBase());
+    carregarFontes(S.arquivos).then(() => { if (ed) ed.sujarBase(); if (S.tpl) desenharTpl(); });
     carregarLogos();
 
-    montarCriar();
-    montarMarcaAtiva();
+    montarChat();
+    montarOpcoes();
     montarFerramentas();
+    montarTemplates();
     ligarAtalhos();
   }
 
-  // ================================================================ painel criar
-  function montarCriar() {
-    $("#ideias").innerHTML = IDEIAS.map((t) => `<button type="button" class="ideia">${esc(t)}</button>`).join("");
-    $("#ideias").addEventListener("click", (ev) => {
-      const b = ev.target.closest(".ideia");
-      if (b) { $("#prompt").value = b.textContent; $("#prompt").focus(); }
+  // ================================================================ chat
+  function montarChat() {
+    const txt = $("#prompt");
+    $("#gerar").addEventListener("click", gerar);
+    txt.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); gerar(); }
+    });
+    const crescer = () => { txt.style.height = "auto"; txt.style.height = Math.min(220, txt.scrollHeight + 2) + "px"; };
+    txt.addEventListener("input", crescer);
+
+    $("#limpar-foco").addEventListener("click", () => definirFoco(null));
+    $("#nova-conversa").addEventListener("click", () => {
+      if (S.gerando) return;
+      S.historico = []; definirFoco(null);
+      $$(".msg", $("#chat")).forEach((m) => m.remove());
+      $("#chat-vazio").hidden = false;
+      $("#nova-conversa").hidden = true;
+      txt.focus();
     });
 
+    // miniaturas no chat: clique seleciona para ajustar; lápis abre no editor
+    $("#chat").addEventListener("click", (ev) => {
+      const b = ev.target.closest("[data-chat-id]");
+      if (!b) return;
+      const it = S.resultados.find((r) => String(r.id) === b.dataset.chatId);
+      if (!it) return;
+      if (ev.target.closest("[data-chat-editar]")) return abrirNoEditor(it);
+      definirFoco(it);
+      txt.focus();
+    });
+
+    // os pedidos ajustam a imagem selecionada (foco)
+    atualizarAnexos();
+  }
+
+  function definirFoco(it) {
+    S.foco = it;
+    const box = $("#chat-foco");
+    box.hidden = !it;
+    if (it) $("img", box).src = it.url;
+    $$("[data-chat-id]").forEach((b) => b.classList.toggle("foco", !!it && b.dataset.chatId === String(it.id)));
+    $$(".cartao[data-id]", $("#resultados")).forEach((c) => c.classList.toggle("foco", !!it && c.dataset.id === String(it.id)));
+    $("#prompt").placeholder = it ? "Peça um ajuste: “fundo mais claro”, “mais pessoas”…" : "Descreva a imagem ou peça um ajuste…";
+  }
+
+  // mostra acima do campo o que vai junto com o próximo pedido
+  function atualizarAnexos() {
+    const box = $("#chat-anexos");
+    const itens = [];
+    if (S.base && !S.foco) itens.push(`<span class="anexo"><img src="${esc(S.base)}" alt="">Imagem de partida</span>`);
+    if (S.fotos.length) itens.push(`<span class="anexo">${S.fotos.map((f) => `<img src="${esc(f.url)}" alt="">`).join("")}${S.fotos.length} foto${S.fotos.length > 1 ? "s" : ""} de pessoa${S.fotos.length > 1 ? "s" : ""}</span>`);
+    box.innerHTML = itens.join("");
+    box.hidden = !itens.length;
+  }
+
+  function addMsg(html, classe) {
+    $("#chat-vazio").hidden = true;
+    $("#nova-conversa").hidden = false;
+    const m = document.createElement("div");
+    m.className = "msg " + classe;
+    m.innerHTML = html;
+    $("#chat").appendChild(m);
+    m.scrollIntoView({ block: "end", behavior: "smooth" });
+    return m;
+  }
+
+  function miniaturasChat(itens) {
+    return `<div class="msg-imagens">${itens.map((it) => `
+      <button type="button" class="msg-img" data-chat-id="${esc(it.id)}" title="Selecionar para ajustar">
+        <img src="${esc(it.url)}" alt="" crossorigin="anonymous">
+        <span class="msg-img-editar" data-chat-editar title="Abrir no editor" aria-label="Abrir no editor">
+          <svg viewBox="0 0 24 24" width="14" height="14"><path d="M4 20h4L19 9l-4-4L4 16v4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        </span>
+      </button>`).join("")}</div>`;
+  }
+
+  // ================================================================ opções (direita)
+  function montarOpcoes() {
     const ativos = S.estilos.filter((e) => e.ativo !== false);
     $("#estilos").innerHTML = ativos.length
       ? ativos.map((e) => `<button type="button" role="radio" class="chip ${S.estilo && S.estilo.id === e.id ? "on" : ""}" aria-checked="${S.estilo && S.estilo.id === e.id}" data-id="${e.id}" title="${esc(e.instrucao)}">${esc(e.nome)}</button>`).join("")
@@ -84,6 +158,7 @@
       if (!b) return;
       S.formato = FORMATOS.find((f) => f.id === b.dataset.id);
       $$(".formato", $("#formatos")).forEach((c) => { c.classList.toggle("on", c === b); c.setAttribute("aria-checked", c === b); });
+      if (S.foco) toast("O novo formato vale para a próxima imagem nova. Ajustes mantêm o formato da imagem selecionada.", "info", 5000);
     });
 
     $("#quantidade").addEventListener("click", (ev) => {
@@ -93,7 +168,7 @@
       $$("button", $("#quantidade")).forEach((x) => x.classList.toggle("on", x === b));
     });
 
-    // imagem de base
+    // imagem de partida
     const soltar = $("#soltar-base");
     const usarBase = async (file) => {
       if (!file || !file.type.startsWith("image/")) return toast("Escolha um arquivo de imagem.", "erro");
@@ -101,21 +176,35 @@
       $("#base-previa img").src = S.base;
       $("#base-previa").hidden = false;
       soltar.hidden = true;
+      atualizarAnexos();
+      if (S.foco) toast("Para partir desta imagem, tire a seleção da imagem em ajuste no chat (×).", "info", 6000);
     };
     $("#arquivo-base").addEventListener("change", (ev) => usarBase(ev.target.files[0]));
-    soltar.addEventListener("dragover", (ev) => { ev.preventDefault(); soltar.classList.add("sobre"); });
-    soltar.addEventListener("dragleave", () => soltar.classList.remove("sobre"));
-    soltar.addEventListener("drop", (ev) => { ev.preventDefault(); soltar.classList.remove("sobre"); usarBase(ev.dataTransfer.files[0]); });
+    ligarSoltar(soltar, (files) => usarBase(files[0]));
     $("#remover-base").addEventListener("click", () => {
       S.base = null; $("#base-previa").hidden = true; soltar.hidden = false; $("#arquivo-base").value = "";
+      atualizarAnexos();
     });
 
-    $("#gerar").addEventListener("click", gerar);
-    $("#prompt").addEventListener("keydown", (ev) => {
-      if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) gerar();
+    // fotos de pessoas
+    const addFotos = async (files) => {
+      const imgs = [...files].filter((f) => f.type.startsWith("image/"));
+      if (!imgs.length) return toast("Escolha arquivos de imagem.", "erro");
+      const livre = MAX_FOTOS - S.fotos.length;
+      if (livre <= 0) return toast(`Use no máximo ${MAX_FOTOS} fotos de pessoas.`, "erro");
+      if (imgs.length > livre) toast(`Só cabem mais ${livre} foto(s). As demais foram ignoradas.`, "aviso");
+      for (const f of imgs.slice(0, livre)) S.fotos.push({ id: uid(), url: await arquivoParaDataURL(f) });
+      desenharFotos();
+    };
+    $("#arquivo-pessoas").addEventListener("change", (ev) => { addFotos(ev.target.files); ev.target.value = ""; });
+    ligarSoltar($("#soltar-pessoas"), addFotos);
+    $("#fotos-pessoas").addEventListener("click", (ev) => {
+      const b = ev.target.closest("[data-remover-foto]");
+      if (!b) return;
+      S.fotos = S.fotos.filter((f) => f.id !== b.dataset.removerFoto);
+      desenharFotos();
     });
 
-    // abas resultados / galeria
     $$("#palco-topo .aba").forEach((b) => b.addEventListener("click", () => mostrarAba(b.dataset.aba)));
 
     $("#abrir-local").addEventListener("change", async (ev) => {
@@ -127,6 +216,20 @@
     });
   }
 
+  function desenharFotos() {
+    $("#fotos-pessoas").innerHTML = S.fotos.map((f) => `
+      <span class="foto-pessoa"><img src="${esc(f.url)}" alt="Foto de pessoa">
+        <button type="button" data-remover-foto="${f.id}" aria-label="Remover foto">×</button></span>`).join("");
+    $("#soltar-pessoas").hidden = S.fotos.length >= MAX_FOTOS;
+    atualizarAnexos();
+  }
+
+  function ligarSoltar(el, aoSoltar) {
+    el.addEventListener("dragover", (ev) => { ev.preventDefault(); el.classList.add("sobre"); });
+    el.addEventListener("dragleave", () => el.classList.remove("sobre"));
+    el.addEventListener("drop", (ev) => { ev.preventDefault(); el.classList.remove("sobre"); aoSoltar(ev.dataTransfer.files); });
+  }
+
   function atualizarAvisoConta() {
     const el = $("#aviso-conta");
     if (!el) return;
@@ -136,7 +239,7 @@
     } else if (S.sessao) {
       el.innerHTML = `Sua conta não usa um e-mail ${esc(API.dominiosDe(m).map((d) => "@" + d).join(" ou "))}, então as artes não são salvas.`;
     } else {
-      el.innerHTML = `Sem login: até ${m.anon_hora ?? 10} imagens por hora e ${m.anon_dia ?? 20} por dia, e as artes não ficam salvas. <button type="button" class="link-sutil" data-ir="entrar">Entrar</button> ou <button type="button" class="link-sutil" data-ir="criar">criar conta</button>.`;
+      el.innerHTML = `Sem login: até ${m.anon_hora ?? 10} imagens por hora e ${m.anon_dia ?? 20} por dia, sem salvar. <button type="button" class="link-sutil" data-ir="entrar">Entrar</button> ou <button type="button" class="link-sutil" data-ir="criar">criar conta</button>.`;
     }
   }
   document.addEventListener("click", (ev) => {
@@ -156,65 +259,105 @@
     </button>`;
   }
 
+  // painel direito: "opcoes" (criar), "ferramentas" (editor) ou "template"
+  function painelDireito(qual) {
+    $("#opcoes").hidden = qual !== "opcoes";
+    $("#ferramentas").hidden = qual !== "ferramentas";
+    $("#painel-template").hidden = qual !== "template";
+    $(".area").classList.toggle("editando", qual !== "opcoes");
+  }
+
   function mostrarAba(aba) {
     $$("#palco-topo .aba").forEach((b) => { const on = b.dataset.aba === aba; b.classList.toggle("on", on); b.setAttribute("aria-selected", on); });
     fecharEditor(false);
+    fecharTemplate(false);
     $("#resultados").hidden = aba !== "resultados";
     $("#galeria").hidden = aba !== "galeria";
+    $("#templates").hidden = aba !== "templates";
     if (aba === "galeria") carregarGaleria();
+    if (aba === "templates") carregarTemplates();
+  }
+
+  function abaAtual() {
+    const b = $("#palco-topo .aba.on");
+    return b ? b.dataset.aba : "resultados";
   }
 
   // ================================================================ gerar
   async function gerar() {
     if (S.gerando) return;
-    const prompt = $("#prompt").value.trim();
-    if (!prompt && !S.base) { toast("Descreva o que você quer criar.", "erro"); $("#prompt").focus(); return; }
+    const txt = $("#prompt");
+    const prompt = txt.value.trim();
+    const refinar = !!S.foco;
+    if (!prompt && !refinar && !S.base && !S.fotos.length) { toast("Descreva o que você quer criar.", "erro"); txt.focus(); return; }
+    if (!prompt && refinar) { toast("Diga o que você quer ajustar na imagem selecionada.", "erro"); txt.focus(); return; }
     S.gerando = true;
     const btn = $("#gerar");
     btn.disabled = true;
     btn.classList.add("carregando");
     btn.querySelector(".txt").textContent = S.quantidade > 1 ? `Gerando ${S.quantidade} variações…` : "Gerando…";
+
+    const formato = refinar && S.foco.formato ? S.foco.formato : S.formato;
+    const foco = S.foco;
+    const usaBase = !refinar && S.base;
+    const historicoAntes = [...S.historico];
+
+    // mensagem da pessoa no chat
+    const anexos = [];
+    if (refinar) anexos.push(`<img src="${esc(foco.url)}" alt="" title="Imagem em ajuste">`);
+    if (usaBase) anexos.push(`<img src="${esc(S.base)}" alt="" title="Imagem de partida">`);
+    S.fotos.forEach((f) => anexos.push(`<img src="${esc(f.url)}" alt="" title="Foto de pessoa">`));
+    addMsg(`${anexos.length ? `<div class="msg-anexos">${anexos.join("")}</div>` : ""}<p>${esc(prompt || "Criar a partir das imagens enviadas")}</p>`, "msg-eu");
+    const resposta = addMsg(`<p class="msg-status"><span class="ponto-carregando"></span>${refinar ? "Ajustando a imagem…" : S.quantidade > 1 ? `Criando ${S.quantidade} variações…` : "Criando a imagem…"}</p>`, "msg-ia");
+    txt.value = ""; txt.style.height = "";
+
     mostrarAba("resultados");
     $("#vazio")?.remove();
-
-    const formato = S.formato;
     const lote = document.createElement("div");
     lote.className = "lote";
-    lote.innerHTML = `<div class="lote-topo"><p class="lote-prompt">${esc(prompt || "A partir da imagem enviada")}</p><span class="lote-meta">${esc(formato.nome)}${S.estilo ? " · " + esc(S.estilo.nome) : ""}</span></div>
+    lote.innerHTML = `<div class="lote-topo"><p class="lote-prompt">${refinar ? '<span class="tag-ajuste">Ajuste</span> ' : ""}${esc(prompt || "A partir das imagens enviadas")}</p><span class="lote-meta">${esc(formato.nome)}${S.estilo ? " · " + esc(S.estilo.nome) : ""}</span></div>
       <div class="lote-grade">${Array.from({ length: S.quantidade }, () => `<div class="cartao carregando" style="aspect-ratio:${proporcaoCss(formato.prop)}"><span class="pulso"></span></div>`).join("")}</div>`;
     $("#resultados").prepend(lote);
-    if (window.innerWidth <= 900) lote.scrollIntoView({ behavior: "smooth", block: "start" });
 
     try {
-      const base = S.base ? await reduzirParaBase64(S.base) : null;
+      const base = refinar ? await reduzirParaBase64(foco.url) : usaBase ? await reduzirParaBase64(S.base) : null;
+      const fotos = await Promise.all(S.fotos.map((f) => reduzirParaBase64(f.url, 1024)));
       const r = await API.gerar({
         prompt,
+        historico: historicoAntes,
         estilo_id: S.estilo?.id || null,
         estilo_nome: S.estilo?.nome || "",
         proporcao: formato.prop,
         formato: formato.id,
         quantidade: S.quantidade,
         base,
+        base_tipo: refinar ? "refinar" : "partir",
+        fotos,
       });
       const itens = r.imagens.map((im) => ({ ...im, formato, prompt }));
       S.resultados.unshift(...itens);
+      if (prompt) S.historico.push(prompt);
       $(".lote-grade", lote).innerHTML = itens.map((it) => cartaoResultado(it, formato)).join("");
-      const meta = $(".lote-meta", lote);
-      meta.insertAdjacentHTML("beforeend", r.salvo
+      $(".lote-meta", lote).insertAdjacentHTML("beforeend", r.salvo
         ? ` · <span class="selo-salvo">Salvo</span>`
         : ` · <span class="selo-nao-salvo" title="Baixe agora ou entre na sua conta para salvar as próximas">Não salvo</span>`);
+      resposta.innerHTML = `<p>${itens.length > 1 ? `Pronto, ${itens.length} variações.` : "Pronto."} ${itens.length > 1 ? "Escolha uma" : "Continue"} e peça ajustes aqui, ou clique no lápis para abrir no editor.</p>${miniaturasChat(itens)}`;
+      definirFoco(itens[0]);
       if (typeof r.restante_hora === "number" && !r.salvo && r.restante_hora <= 3) {
         toast(r.restante_hora > 0 ? `Sem login, você ainda pode gerar ${r.restante_hora} imagem(ns) nesta hora.` : "Você usou o limite desta hora sem login. Entre na sua conta para gerar mais.", "aviso", 6000);
       }
       if (r.erros && r.erros.length) toast(`${r.erros.length} variação(ões) falharam: ${r.erros[0]}`, "aviso", 7000);
     } catch (e) {
       $(".lote-grade", lote).innerHTML = `<div class="erro-lote">${esc(e.message)}</div>`;
-      toast(e.message, "erro", 8000);
+      resposta.classList.add("msg-erro");
+      resposta.innerHTML = `<p>${esc(e.message)}</p>`;
+      if (prompt) { txt.value = prompt; }
     } finally {
       S.gerando = false;
       btn.disabled = false;
       btn.classList.remove("carregando");
       btn.querySelector(".txt").textContent = "Gerar imagens";
+      resposta.scrollIntoView({ block: "end", behavior: "smooth" });
     }
   }
 
@@ -225,6 +368,7 @@
       <img src="${esc(it.url)}" alt="${esc(it.prompt || "Imagem gerada")}" loading="lazy" crossorigin="anonymous" style="aspect-ratio:${proporcaoCss(formato.prop)}">
       <figcaption>
         <button type="button" class="btn btn-sm btn-primario" data-acao="editar">Editar</button>
+        <button type="button" class="btn btn-sm btn-claro" data-acao="ajustar">Ajustar no chat</button>
         <button type="button" class="btn btn-sm btn-claro" data-acao="baixar-original">Baixar</button>
       </figcaption>
     </figure>`;
@@ -236,7 +380,8 @@
     if (!card) return;
     const it = S.resultados.find((r) => String(r.id) === card.dataset.id);
     if (!it) return;
-    if (b && b.dataset.acao === "baixar-original") return baixarUrl(it.url, nomeBase(it) + ".png");
+    if (b && b.dataset.acao === "baixar-original") return baixarUrl(it.url, nomeBase(it) + ".jpg");
+    if (b && b.dataset.acao === "ajustar") { definirFoco(it); $("#prompt").focus(); return; }
     abrirNoEditor(it);
   });
 
@@ -267,6 +412,7 @@
             <span class="g-data">${new Date(it.criado_em).toLocaleDateString("pt-BR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
             <span class="g-acoes">
               <button type="button" class="btn btn-sm btn-primario" data-acao="editar">Editar</button>
+              <button type="button" class="btn btn-sm btn-ghost" data-acao="ajustar">Ajustar no chat</button>
               <button type="button" class="icone" data-acao="apagar" title="Apagar" aria-label="Apagar">
                 <svg viewBox="0 0 24 24" width="16" height="16"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
               </button>
@@ -290,28 +436,34 @@
       return;
     }
     const formato = FORMATOS.find((f) => f.id === it.formato) || null;
-    abrirNoEditor({ ...it, formato });
+    const item = { ...it, formato };
+    if (b && b.dataset.acao === "ajustar") {
+      if (!S.resultados.some((r) => r.id === item.id)) S.resultados.push(item);
+      definirFoco(item); $("#prompt").focus(); return;
+    }
+    abrirNoEditor(item);
   });
 
   // ================================================================ editor
-  async function abrirNoEditor(it) {
+  async function abrirNoEditor(it, { semLogo = false } = {}) {
+    fecharTemplate(false);
     S.aberto = it;
     $("#resultados").hidden = true;
     $("#galeria").hidden = true;
+    $("#templates").hidden = true;
     $("#editor").hidden = false;
     $("#palco-topo").hidden = true;
-    $("#marca-ativa").hidden = true;
-    $("#ferramentas").hidden = false;
-    $(".area").classList.add("editando");
+    painelDireito("ferramentas");
     if (window.innerWidth <= 900) window.scrollTo({ top: 0 });
     try {
       ed.textos = [];
       ed.sel = null;
       await ed.carregar(it.url, it.formato);
-      aplicarLogoPadrao();
+      if (semLogo) ed.logo = { ...ed.logo, id: null }; else aplicarLogoPadrao();
       ed.marcar();
       ed.historico = [ed.historico[ed.historico.length - 1]];
       $("#exp-nome").value = nomeBase(it);
+      $(".refinar").hidden = !!it.semIA;
       sincronizarFerramentas();
       aoSelecionar(null);
       mostrarFerr("formato");
@@ -321,28 +473,31 @@
     }
   }
 
-  function fecharEditor(voltarResultados = true) {
+  function fecharEditor(voltar = true) {
     if ($("#editor").hidden) return;
     if (ed.modo === "recorte") cancelarRecorte();
     $("#editor").hidden = true;
     $("#palco-topo").hidden = false;
-    $("#marca-ativa").hidden = false;
-    $("#ferramentas").hidden = true;
-    $(".area").classList.remove("editando");
+    painelDireito("opcoes");
+    const veioDeTemplate = S.aberto && S.aberto.deTemplate;
     S.aberto = null;
-    if (voltarResultados) {
-      const abaGaleria = $('#palco-topo .aba[data-aba="galeria"]').classList.contains("on");
-      $("#resultados").hidden = abaGaleria;
-      $("#galeria").hidden = !abaGaleria;
+    if (voltar) {
+      const aba = abaAtual();
+      $("#resultados").hidden = aba !== "resultados";
+      $("#galeria").hidden = aba !== "galeria";
+      $("#templates").hidden = aba !== "templates";
+      if (veioDeTemplate && S.tpl) reabrirTemplate();
     }
   }
   $("#voltar").addEventListener("click", () => fecharEditor(true));
 
+
   function nomeBase(it) {
-    const f = it.formato ? it.formato.id : "imagem";
-    const slug = (it.prompt || "criadigi").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
-      .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "criadigi";
-    return `criadigi-${slug}-${f}`;
+    const limpar = (t, max) => String(t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, max);
+    const slug = limpar(it.prompt, 40) || "criadigi";
+    const f = it.formato ? limpar(it.formato.nome, 24) : "";
+    return `criadigi-${slug}${f ? "-" + f : ""}`;
   }
 
   // logos da marca
@@ -711,7 +866,7 @@
       const formato = S.aberto.formato || FORMATOS.reduce((m, f) => Math.abs(f.w / f.h - ed.out.w / ed.out.h) < Math.abs(m.w / m.h - ed.out.w / ed.out.h) ? f : m, FORMATOS[0]);
       const r = await API.gerar({
         prompt: pedido, estilo_id: S.estilo?.id || null, estilo_nome: S.estilo?.nome || "",
-        proporcao: formato.prop, formato: formato.id, quantidade: 1, base,
+        proporcao: formato.prop, formato: formato.id, quantidade: 1, base, base_tipo: "refinar",
       });
       const nova = r.imagens[0];
       S.aberto = { ...S.aberto, id: nova.id, url: nova.url };
@@ -725,31 +880,6 @@
       btn.disabled = false; btn.textContent = "Refinar";
       $(".tela-wrap").classList.remove("processando");
     }
-  }
-
-  // ---------------------------------------------------------------- marca ativa
-  function montarMarcaAtiva() {
-    const fontes = fontesDisponiveis();
-    const logos = logosAtivos();
-    $("#marca-ativa").innerHTML = `
-      <h2 class="titulo-painel">Marca ativa</h2>
-      <p class="nome-marca">${esc(S.marca?.nome || "Digi")}</p>
-      ${S.marca?.descricao ? `<p class="ajuda">${esc(S.marca.descricao)}</p>` : ""}
-      <span class="rotulo">Paleta</span>
-      <ul class="paleta-lista">
-        ${S.cores.map((c) => `<li><span class="bola" style="--c:${c.hex}"></span><span>${esc(c.nome)}</span><code>${c.hex.toUpperCase()}</code></li>`).join("")}
-      </ul>
-      <span class="rotulo">Tipografia</span>
-      <ul class="fontes-lista">${fontes.map((f) => `<li style="font-family:'${esc(f)}',sans-serif">${esc(f)}</li>`).join("")}</ul>
-      ${logos.length ? `<span class="rotulo">Logos</span><div class="logos-mini">${logos.map((l) => `<span class="${l.variante === "negativa" ? "escuro" : ""}"><img src="${esc(l.url)}" alt="${esc(l.nome)}"></span>`).join("")}</div>` : ""}
-      <div class="dicas">
-        <span class="rotulo">Dicas para bons resultados</span>
-        <ul>
-          <li>Descreva a cena: quem, onde, fazendo o quê.</li>
-          <li>Diga o clima: conquista, calma, energia.</li>
-          <li>Não peça textos na imagem: você coloca depois no editor, com a fonte certa.</li>
-        </ul>
-      </div>`;
   }
 
   // ---------------------------------------------------------------- atalhos
@@ -781,6 +911,321 @@
       const blob = await (await fetch(url)).blob();
       baixarBlob(blob, nome);
     } catch (_) { window.open(url, "_blank"); }
+  }
+
+  // ================================================================ templates
+  // Artes prontas do admin: o usuário só edita os textos e coloca a foto.
+  function montarTemplates() {
+    $("#tpl-categorias").addEventListener("click", (ev) => {
+      const b = ev.target.closest("[data-cat]");
+      if (!b) return;
+      S.categoria = b.dataset.cat;
+      desenharListaTemplates();
+    });
+    $("#tpl-lista").addEventListener("click", (ev) => {
+      const card = ev.target.closest("[data-tpl]");
+      if (!card) return;
+      const t = (S.templates || []).find((x) => String(x.id) === card.dataset.tpl);
+      if (t) abrirTemplate(t);
+    });
+    $("#tpl-voltar").addEventListener("click", () => { fecharTemplate(true); });
+    ligarArrasteTemplate();
+  }
+
+  async function carregarTemplates() {
+    if (S.templates) return desenharListaTemplates();
+    $("#tpl-lista").innerHTML = `<p class="ajuda">Carregando…</p>`;
+    try {
+      S.templates = await API.templates();
+      desenharListaTemplates();
+    } catch (e) {
+      $("#tpl-lista").innerHTML = `<div class="erro-lote">${esc(e.message)}</div>`;
+    }
+  }
+
+  function desenharListaTemplates() {
+    const lista = S.templates || [];
+    const cats = ["Todas", ...new Set(lista.map((t) => t.categoria || "Geral"))];
+    if (!cats.includes(S.categoria)) S.categoria = "Todas";
+    $("#tpl-categorias").innerHTML = lista.length > 1 && cats.length > 2
+      ? cats.map((c) => `<button type="button" class="chip ${c === S.categoria ? "on" : ""}" data-cat="${esc(c)}">${esc(c)}</button>`).join("") : "";
+    const vis = lista.filter((t) => S.categoria === "Todas" || (t.categoria || "Geral") === S.categoria);
+    $("#tpl-lista").innerHTML = vis.length ? vis.map((t) => `
+      <button type="button" class="tpl-cartao" data-tpl="${esc(t.id)}">
+        <span class="tpl-thumb" style="aspect-ratio:${t.largura} / ${t.altura}"><img src="${esc(t.base_url)}" alt="" loading="lazy" crossorigin="anonymous"></span>
+        <span class="tpl-nome">${esc(t.nome)}</span>
+        <span class="tpl-meta">${esc(t.categoria || "Geral")} · ${t.largura}×${t.altura}</span>
+      </button>`).join("")
+      : `<div class="vazio"><h3>Nenhum template ainda</h3><p>O admin cadastra as artes prontas, como aniversários e comunicados. Elas aparecem aqui.</p></div>`;
+  }
+
+  async function abrirTemplate(t) {
+    $("#templates").hidden = true;
+    $("#palco-topo").hidden = true;
+    $("#tpl-uso").hidden = false;
+    painelDireito("template");
+    $("#painel-template").innerHTML = `<p class="ajuda">Carregando o template…</p>`;
+    $("#tpl-info").textContent = `${t.nome} · ${t.largura} × ${t.altura} px`;
+    if (window.innerWidth <= 900) window.scrollTo({ top: 0 });
+    try {
+      const imgs = await Modelo.carregar(t);
+      const textos = {};
+      (t.campos || []).filter((c) => c.tipo === "texto").forEach((c) => { textos[c.id] = c.padrao || ""; });
+      S.tpl = { t, imgs, estado: { textos, fotos: {} }, exp: { tipo: "image/png" }, ocupado: {} };
+      const cv = $("#tpl-tela");
+      cv.width = t.largura; cv.height = t.altura;
+      montarPainelTemplate();
+      desenharTpl();
+    } catch (e) {
+      toast("Não consegui abrir o template: " + e.message, "erro");
+      fecharTemplate(true);
+    }
+  }
+
+  function reabrirTemplate() {
+    $("#templates").hidden = true;
+    $("#palco-topo").hidden = true;
+    $("#tpl-uso").hidden = false;
+    painelDireito("template");
+    desenharTpl();
+  }
+
+  function fecharTemplate(voltarLista) {
+    if ($("#tpl-uso").hidden) return;
+    $("#tpl-uso").hidden = true;
+    $("#palco-topo").hidden = false;
+    painelDireito("opcoes");
+    if (voltarLista) { S.tpl = null; mostrarAba("templates"); }
+  }
+
+  function desenharTpl() {
+    if (!S.tpl) return;
+    const ctx = $("#tpl-tela").getContext("2d");
+    S.tpl.caixas = Modelo.desenhar(ctx, S.tpl.t, S.tpl.imgs, S.tpl.estado, { vagas: true });
+  }
+
+  const ROTULO_IA = {
+    retrato: "A IA transforma a foto em um retrato profissional no padrão da arte.",
+    fundo: "A IA troca o fundo da foto para combinar com a arte.",
+    personalizado: "A IA prepara a foto para combinar com a arte.",
+  };
+
+  function montarPainelTemplate() {
+    const { t } = S.tpl;
+    const campos = t.campos || [];
+    const textos = campos.filter((c) => c.tipo === "texto");
+    const fotos = campos.filter((c) => c.tipo === "foto");
+    const p = $("#painel-template");
+    p.innerHTML = `
+      <h2 class="titulo-painel">${esc(t.nome)}</h2>
+      ${textos.length ? `<span class="rotulo">Textos</span>` : ""}
+      ${textos.map((c) => `
+        <label class="campo campo-tpl"><span class="rotulo-campo">${esc(c.rotulo || "Texto")}</span>
+          ${(c.linhas_max || 1) > 1
+            ? `<textarea rows="${Math.min(4, c.linhas_max)}" data-tpl-texto="${c.id}">${esc(S.tpl.estado.textos[c.id] || "")}</textarea>`
+            : `<input type="text" data-tpl-texto="${c.id}" value="${esc(S.tpl.estado.textos[c.id] || "")}">`}
+        </label>`).join("")}
+      ${fotos.map((c) => `
+        <div class="bloco caixa-opcao" data-tpl-foto="${c.id}">
+          <span class="rotulo">${esc(c.rotulo || "Foto")}</span>
+          ${c.ia && c.ia !== "nenhum" ? `<p class="ajuda">${ROTULO_IA[c.ia] || ROTULO_IA.personalizado}</p>` : ""}
+          <label class="soltar soltar-sm">
+            <input type="file" accept="image/*" hidden data-tpl-arquivo="${c.id}">
+            <span>Arraste a foto aqui ou <u>escolha</u></span>
+          </label>
+          <div class="tpl-foto-estado" hidden></div>
+          <div class="tpl-foto-ctrl" hidden>
+            <label class="deslizador">Zoom <output>100%</output><input type="range" min="100" max="300" value="100" data-tpl-zoom="${c.id}"></label>
+            <div class="linha-botoes">
+              ${c.ia && c.ia !== "nenhum" ? `<button type="button" class="btn btn-sm btn-ghost" data-tpl-alternar="${c.id}">Ver foto original</button>
+              <button type="button" class="btn btn-sm btn-ghost" data-tpl-refazer="${c.id}">Refazer com IA</button>` : ""}
+              <button type="button" class="btn btn-sm btn-perigo" data-tpl-remover="${c.id}">Remover</button>
+            </div>
+          </div>
+        </div>`).join("")}
+      ${fotos.length ? `<p class="ajuda ajuda-mini">Use só fotos de pessoas que autorizaram o uso da imagem.</p>` : ""}
+      <span class="rotulo">Baixar</span>
+      <div class="segmentado" id="tpl-exp-tipo">
+        <button type="button" data-tipo="image/png" class="on">PNG</button>
+        <button type="button" data-tipo="image/jpeg">JPG</button>
+      </div>
+      <button type="button" class="btn btn-primario btn-largo" id="tpl-baixar" style="margin-top:12px">Baixar arte</button>
+      <button type="button" class="btn btn-ghost btn-largo" id="tpl-copiar" style="margin-top:8px">Copiar</button>
+      <button type="button" class="btn btn-ghost btn-largo" id="tpl-editor" style="margin-top:8px" title="Recortar, redimensionar, ajustar">Abrir no editor</button>`;
+
+    p.oninput = (ev) => {
+      const id = ev.target.dataset.tplTexto;
+      if (id) { S.tpl.estado.textos[id] = ev.target.value; desenharTpl(); }
+      const z = ev.target.dataset.tplZoom;
+      if (z) {
+        const f = S.tpl.estado.fotos[z];
+        if (f) { f.zoom = Number(ev.target.value) / 100; ev.target.previousElementSibling.value = ev.target.value + "%"; desenharTpl(); }
+      }
+    };
+    p.onchange = (ev) => {
+      const id = ev.target.dataset.tplArquivo;
+      if (id && ev.target.files[0]) { usarFotoTemplate(id, ev.target.files[0]); ev.target.value = ""; }
+    };
+    p.onclick = async (ev) => {
+      const tipo = ev.target.closest("#tpl-exp-tipo [data-tipo]");
+      if (tipo) {
+        S.tpl.exp.tipo = tipo.dataset.tipo;
+        $$("#tpl-exp-tipo button").forEach((b) => b.classList.toggle("on", b === tipo));
+        return;
+      }
+      const alt = ev.target.closest("[data-tpl-alternar]");
+      if (alt) {
+        const f = S.tpl.estado.fotos[alt.dataset.tplAlternar];
+        if (!f || !f.tratada) return;
+        f.img = f.img === f.tratada ? f.original : f.tratada;
+        alt.textContent = f.img === f.tratada ? "Ver foto original" : "Usar foto da IA";
+        desenharTpl();
+        return;
+      }
+      const ref = ev.target.closest("[data-tpl-refazer]");
+      if (ref) { tratarFotoTemplate(ref.dataset.tplRefazer); return; }
+      const rem = ev.target.closest("[data-tpl-remover]");
+      if (rem) {
+        delete S.tpl.estado.fotos[rem.dataset.tplRemover];
+        atualizarBlocoFoto(rem.dataset.tplRemover);
+        desenharTpl();
+        return;
+      }
+      if (ev.target.closest("#tpl-baixar")) return baixarTemplate();
+      if (ev.target.closest("#tpl-copiar")) return copiarTemplate();
+      if (ev.target.closest("#tpl-editor")) return editarTemplate();
+    };
+    $$("[data-tpl-foto] .soltar", p).forEach((el) => {
+      const id = el.closest("[data-tpl-foto]").dataset.tplFoto;
+      ligarSoltar(el, (files) => files[0] && usarFotoTemplate(id, files[0]));
+    });
+  }
+
+  function campoTpl(id) { return (S.tpl.t.campos || []).find((c) => c.id === id); }
+
+  async function usarFotoTemplate(id, file) {
+    if (!file.type.startsWith("image/")) return toast("Escolha um arquivo de imagem.", "erro");
+    const url = await arquivoParaDataURL(file);
+    const img = await carregarImagem(url);
+    S.tpl.estado.fotos[id] = { img, original: img, url, zoom: 1, dx: 0, dy: 0, tratada: null };
+    atualizarBlocoFoto(id);
+    desenharTpl();
+    const c = campoTpl(id);
+    if (c && c.ia && c.ia !== "nenhum") tratarFotoTemplate(id);
+  }
+
+  async function tratarFotoTemplate(id) {
+    const f = S.tpl.estado.fotos[id];
+    const c = campoTpl(id);
+    if (!f || !c || S.tpl.ocupado[id]) return;
+    S.tpl.ocupado[id] = true;
+    atualizarBlocoFoto(id, "A IA está preparando a foto…");
+    try {
+      const foto = await reduzirParaBase64(f.url, 1280);
+      const proporcao = window.CriaDigi.proporcaoIA(c.w * S.tpl.t.largura, c.h * S.tpl.t.altura);
+      const r = await API.gerar({ modo: "foto", foto, tratamento: c.ia, cor: c.ia_cor || null, instrucao: c.ia_instrucao || "", proporcao });
+      const img = await carregarImagem(r.imagens[0].url);
+      const atual = S.tpl && S.tpl.estado.fotos[id];
+      if (atual === f) { f.tratada = img; f.img = img; f.zoom = 1; f.dx = 0; f.dy = 0; }
+      S.tpl.ocupado[id] = false;
+      atualizarBlocoFoto(id);
+      desenharTpl();
+    } catch (e) {
+      if (S.tpl) S.tpl.ocupado[id] = false;
+      atualizarBlocoFoto(id, null, `A IA não conseguiu preparar a foto: ${e.message} A foto original foi usada.`);
+    }
+  }
+
+  function atualizarBlocoFoto(id, carregando = null, erro = null) {
+    const bloco = $(`[data-tpl-foto="${id}"]`);
+    if (!bloco) return;
+    const f = S.tpl.estado.fotos[id];
+    const st = $(".tpl-foto-estado", bloco);
+    $(".soltar", bloco).hidden = !!f;
+    $(".tpl-foto-ctrl", bloco).hidden = !f || !!carregando;
+    st.hidden = !f;
+    if (!f) return;
+    st.className = "tpl-foto-estado" + (erro ? " erro" : "");
+    st.innerHTML = `<img src="${esc(f.tratada && f.img === f.tratada ? f.tratada.src : f.url)}" alt="">
+      <span>${carregando ? `<span class="ponto-carregando"></span>${esc(carregando)}` : erro ? esc(erro) : f.tratada ? "Foto preparada pela IA. Arraste na arte para ajustar." : "Arraste na arte para ajustar o enquadramento."}</span>`;
+    const z = $(`[data-tpl-zoom="${id}"]`, bloco);
+    if (z) { z.value = Math.round((f.zoom || 1) * 100); z.previousElementSibling.value = z.value + "%"; }
+    const alt = $(`[data-tpl-alternar="${id}"]`, bloco);
+    if (alt) { alt.hidden = !f.tratada; alt.textContent = f.img === f.tratada ? "Ver foto original" : "Usar foto da IA"; }
+  }
+
+  // arrastar a foto dentro da moldura
+  function ligarArrasteTemplate() {
+    const cv = $("#tpl-tela");
+    let arr = null;
+    const ponto = (ev) => {
+      const r = cv.getBoundingClientRect();
+      return { x: (ev.clientX - r.left) * cv.width / r.width, y: (ev.clientY - r.top) * cv.height / r.height };
+    };
+    cv.addEventListener("pointerdown", (ev) => {
+      if (!S.tpl) return;
+      const p = ponto(ev);
+      const c = (S.tpl.t.campos || []).filter((x) => x.tipo === "foto").reverse().find((x) => {
+        const W = cv.width, H = cv.height;
+        return p.x >= x.x * W && p.x <= (x.x + x.w) * W && p.y >= x.y * H && p.y <= (x.y + x.h) * H;
+      });
+      if (!c) return;
+      const f = S.tpl.estado.fotos[c.id];
+      if (!f) { const inp = $(`[data-tpl-arquivo="${c.id}"]`); if (inp) inp.click(); return; }
+      arr = { c, f, x: p.x, y: p.y, dx: f.dx || 0, dy: f.dy || 0 };
+      cv.setPointerCapture(ev.pointerId);
+    });
+    cv.addEventListener("pointermove", (ev) => {
+      if (!S.tpl) return;
+      const p = ponto(ev);
+      if (!arr) {
+        const sobre = (S.tpl.t.campos || []).some((x) => x.tipo === "foto" && p.x >= x.x * cv.width && p.x <= (x.x + x.w) * cv.width && p.y >= x.y * cv.height && p.y <= (x.y + x.h) * cv.height);
+        cv.style.cursor = sobre ? "grab" : "default";
+        return;
+      }
+      const { c, f } = arr;
+      const w = c.w * cv.width, h = c.h * cv.height;
+      const iw = f.img.naturalWidth || f.img.width, ih = f.img.naturalHeight || f.img.height;
+      const k = Math.max(w / iw, h / ih) * (f.zoom || 1);
+      const folgaX = (iw * k - w) / 2, folgaY = (ih * k - h) / 2;
+      f.dx = folgaX > 0.5 ? Math.max(-1, Math.min(1, arr.dx + (p.x - arr.x) / folgaX)) : 0;
+      f.dy = folgaY > 0.5 ? Math.max(-1, Math.min(1, arr.dy + (p.y - arr.y) / folgaY)) : 0;
+      desenharTpl();
+    });
+    const soltar = () => { arr = null; };
+    cv.addEventListener("pointerup", soltar);
+    cv.addEventListener("pointercancel", soltar);
+  }
+
+  function fotosVazias() {
+    return (S.tpl.t.campos || []).filter((c) => c.tipo === "foto" && !S.tpl.estado.fotos[c.id]);
+  }
+
+  async function baixarTemplate() {
+    const vazias = fotosVazias();
+    if (vazias.length && !confirm(`Falta a foto em "${vazias[0].rotulo || "Foto"}". Baixar mesmo assim?`)) return;
+    try {
+      const blob = await Modelo.exportar(S.tpl.t, S.tpl.imgs, S.tpl.estado, S.tpl.exp.tipo, 0.92);
+      const slug = (S.tpl.t.nome || "template").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+      baixarBlob(blob, `criadigi-${slug}.${S.tpl.exp.tipo === "image/jpeg" ? "jpg" : "png"}`);
+    } catch (e) { toast(e.message, "erro"); }
+  }
+
+  async function copiarTemplate() {
+    try {
+      const blob = await Modelo.exportar(S.tpl.t, S.tpl.imgs, S.tpl.estado, "image/png");
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      toast("Arte copiada. Cole onde quiser.", "ok");
+    } catch (_) { toast("Seu navegador não permitiu copiar. Use o botão Baixar.", "erro"); }
+  }
+
+  async function editarTemplate() {
+    try {
+      const blob = await Modelo.exportar(S.tpl.t, S.tpl.imgs, S.tpl.estado, "image/png");
+      const url = await arquivoParaDataURL(blob);
+      $("#tpl-uso").hidden = true;
+      abrirNoEditor({ id: "tpl-" + Date.now(), url, formato: null, prompt: S.tpl.t.nome, deTemplate: true, semIA: true }, { semLogo: true });
+    } catch (e) { toast(e.message, "erro"); }
   }
 
   iniciar();

@@ -26,54 +26,34 @@
 <main id="app" hidden>
   <div class="area">
 
-    <!-- ============ CRIAR ============ -->
-    <aside class="painel painel-criar" aria-label="Criar imagem">
-      <h2 class="titulo-painel">Criar imagem</h2>
-
-      <label class="campo" for="prompt">
-        <span class="rotulo">O que você quer criar?</span>
-        <textarea id="prompt" rows="5" maxlength="2000"
-          placeholder="Ex.: equipe comemorando a meta batida em um escritório moderno, clima de conquista"></textarea>
-      </label>
-      <div class="ideias" id="ideias" aria-label="Ideias de prompt"></div>
-
-      <div class="bloco">
-        <span class="rotulo">Estilo</span>
-        <div class="chips" id="estilos" role="radiogroup" aria-label="Estilo"></div>
+    <!-- ============ CHAT ============ -->
+    <aside class="painel painel-criar painel-chat" aria-label="Criar com IA">
+      <div class="chat-topo">
+        <h2 class="titulo-painel">Criar com IA</h2>
+        <button type="button" class="btn btn-sm btn-ghost" id="nova-conversa" hidden>Nova conversa</button>
       </div>
 
-      <div class="bloco">
-        <span class="rotulo">Formato</span>
-        <div class="formatos" id="formatos" role="radiogroup" aria-label="Formato"></div>
-      </div>
-
-      <div class="bloco">
-        <span class="rotulo">Variações</span>
-        <div class="segmentado" id="quantidade" role="radiogroup" aria-label="Quantidade de variações">
-          <button type="button" data-q="1">1</button>
-          <button type="button" data-q="2" class="on">2</button>
-          <button type="button" data-q="4">4</button>
+      <div class="chat-mensagens" id="chat" aria-live="polite">
+        <div class="chat-vazio" id="chat-vazio">
+          <p><b>Descreva a imagem que você quer.</b></p>
+          <p>Depois continue a conversa pedindo ajustes, como “deixe o fundo mais claro” ou “coloque confetes”. A IA ajusta a imagem selecionada.</p>
         </div>
       </div>
 
-      <details class="bloco base-opcional" id="bloco-base">
-        <summary>Partir de uma imagem <small>(opcional)</small></summary>
-        <p class="ajuda">Envie uma foto ou rascunho. A IA vai recriá-la dentro do padrão da marca.</p>
-        <label class="soltar" id="soltar-base">
-          <input type="file" id="arquivo-base" accept="image/*" hidden>
-          <span>Arraste aqui ou <u>escolha um arquivo</u></span>
-        </label>
-        <div class="base-previa" id="base-previa" hidden>
-          <img alt="Imagem de base">
-          <button type="button" class="btn btn-sm btn-ghost" id="remover-base">Remover</button>
+      <div class="chat-compor">
+        <div class="chat-foco" id="chat-foco" hidden>
+          <img alt="">
+          <span>Ajustando esta imagem</span>
+          <button type="button" class="icone mini-x" id="limpar-foco" title="Criar uma imagem nova em vez de ajustar" aria-label="Criar uma imagem nova em vez de ajustar">×</button>
         </div>
-      </details>
-
-      <button class="btn btn-primario btn-largo btn-gerar" id="gerar" type="button">
-        <span class="txt">Gerar imagens</span>
-      </button>
-      <p class="nota-marca" id="aviso-conta"></p>
-      <p class="nota-marca">Toda imagem segue o manual da marca: paleta, estilo e regras cadastrados pelo admin.</p>
+        <div class="chat-anexos" id="chat-anexos" hidden></div>
+        <textarea id="prompt" rows="3" maxlength="2000"
+          placeholder="Descreva a imagem ou peça um ajuste…" aria-label="Mensagem para a IA"></textarea>
+        <button class="btn btn-primario btn-largo btn-gerar" id="gerar" type="button">
+          <span class="txt">Gerar imagens</span>
+        </button>
+        <p class="nota-marca" id="aviso-conta"></p>
+      </div>
     </aside>
 
     <!-- ============ PALCO ============ -->
@@ -81,6 +61,7 @@
       <div class="palco-topo" id="palco-topo">
         <div class="abas" role="tablist">
           <button role="tab" class="aba on" data-aba="resultados" aria-selected="true">Resultados</button>
+          <button role="tab" class="aba" data-aba="templates" aria-selected="false">Templates</button>
           <button role="tab" class="aba" data-aba="galeria" aria-selected="false">Minhas criações</button>
         </div>
         <label class="btn btn-sm btn-ghost">
@@ -100,6 +81,22 @@
       </div>
 
       <div id="galeria" class="grade" hidden></div>
+
+      <div id="templates" hidden>
+        <div class="chips" id="tpl-categorias" role="tablist" aria-label="Categorias"></div>
+        <div class="tpl-grade" id="tpl-lista"></div>
+      </div>
+
+      <div id="tpl-uso" class="editor" hidden>
+        <div class="editor-barra">
+          <button type="button" class="btn btn-sm btn-ghost" id="tpl-voltar">← Templates</button>
+          <span class="editor-info" id="tpl-info"></span>
+        </div>
+        <div class="tela-wrap">
+          <canvas id="tpl-tela" aria-label="Template em edição"></canvas>
+        </div>
+        <p class="dica-editor">Arraste a foto dentro da moldura para ajustar o enquadramento.</p>
+      </div>
 
       <div id="editor" class="editor" hidden>
         <div class="editor-barra">
@@ -131,7 +128,56 @@
 
     <!-- ============ FERRAMENTAS ============ -->
     <aside class="painel painel-ferramentas" aria-label="Ferramentas">
-      <div id="marca-ativa"></div>
+      <!-- opções da criação -->
+      <div id="opcoes">
+        <h2 class="titulo-painel">Opções</h2>
+
+        <div class="bloco">
+          <span class="rotulo">Estilo</span>
+          <div class="chips" id="estilos" role="radiogroup" aria-label="Estilo"></div>
+        </div>
+
+        <div class="bloco">
+          <span class="rotulo">Formato</span>
+          <div class="formatos" id="formatos" role="radiogroup" aria-label="Formato"></div>
+        </div>
+
+        <div class="bloco">
+          <span class="rotulo">Variações</span>
+          <div class="segmentado" id="quantidade" role="radiogroup" aria-label="Quantidade de variações">
+            <button type="button" data-q="1">1</button>
+            <button type="button" data-q="2" class="on">2</button>
+            <button type="button" data-q="4">4</button>
+          </div>
+        </div>
+
+        <div class="bloco caixa-opcao">
+          <span class="rotulo">Partir de uma imagem</span>
+          <p class="ajuda">Uma foto ou rascunho que a IA recria no padrão da marca.</p>
+          <label class="soltar soltar-sm" id="soltar-base">
+            <input type="file" id="arquivo-base" accept="image/*" hidden>
+            <span>Arraste aqui ou <u>escolha</u></span>
+          </label>
+          <div class="base-previa" id="base-previa" hidden>
+            <img alt="Imagem de partida">
+            <button type="button" class="btn btn-sm btn-ghost" id="remover-base">Remover</button>
+          </div>
+        </div>
+
+        <div class="bloco caixa-opcao">
+          <span class="rotulo">Fotos de pessoas</span>
+          <p class="ajuda">Para criar uma arte com alguém. A IA mantém o rosto da pessoa. Até 4 fotos.</p>
+          <div class="fotos-pessoas" id="fotos-pessoas"></div>
+          <label class="soltar soltar-sm" id="soltar-pessoas">
+            <input type="file" id="arquivo-pessoas" accept="image/*" multiple hidden>
+            <span>Arraste aqui ou <u>escolha</u></span>
+          </label>
+          <p class="ajuda ajuda-mini">Use só fotos de pessoas que autorizaram o uso da imagem.</p>
+        </div>
+      </div>
+
+      <!-- campos do template aberto -->
+      <div id="painel-template" hidden></div>
 
       <div id="ferramentas" hidden>
         <div class="refinar">
@@ -285,6 +331,7 @@
 <script src="assets/js/config.js"></script>
 <script src="assets/js/core.js"></script>
 <script src="assets/js/editor.js"></script>
+<script src="assets/js/modelo.js"></script>
 <script src="assets/js/app.js"></script>
 </body>
 </html>
